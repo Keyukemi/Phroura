@@ -26,4 +26,4 @@ The goal of this project is to design, implement, and evaluate a phishing detect
 
 ## Status
 
-Sprint 1 is focused on project setup, scope control, and planning artifacts.
+Sprint 2 now has a working lexical feature extraction module, representative tests, and sample feature output generated from raw URLs.
