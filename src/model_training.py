@@ -12,16 +12,19 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.svm import LinearSVC
 
 from src.training import DATASET_PATH, DEFAULT_RANDOM_STATE, FeatureSplit, load_url_dataset, make_train_test_split
 
 
 LOGISTIC_REGRESSION_METRICS_PATH = Path("models/logistic_regression_metrics.json")
 RANDOM_FOREST_METRICS_PATH = Path("models/random_forest_metrics.json")
+SVM_METRICS_PATH = Path("models/svm_metrics.json")
 DEFAULT_MODEL_NAME = "logistic_regression"
 MODEL_METRICS_PATHS = {
     "logistic_regression": LOGISTIC_REGRESSION_METRICS_PATH,
     "random_forest": RANDOM_FOREST_METRICS_PATH,
+    "svm": SVM_METRICS_PATH,
 }
 
 
@@ -71,18 +74,47 @@ def train_random_forest(split: FeatureSplit, random_state: int = DEFAULT_RANDOM_
     return model
 
 
+def build_svm_model(random_state: int = DEFAULT_RANDOM_STATE) -> Pipeline:
+    """Create the third Sprint 3 comparison model."""
+
+    return Pipeline(
+        steps=[
+            ("scaler", StandardScaler()),
+            (
+                "classifier",
+                LinearSVC(
+                    class_weight="balanced",
+                    max_iter=5000,
+                    random_state=random_state,
+                ),
+            ),
+        ]
+    )
+
+
+def train_svm(split: FeatureSplit, random_state: int = DEFAULT_RANDOM_STATE) -> Pipeline:
+    """Train a linear SVM on a prepared feature split."""
+
+    model = build_svm_model(random_state=random_state)
+    model.fit(split.X_train, split.y_train)
+    return model
+
+
 def evaluate_classifier(model: Any, split: FeatureSplit) -> dict[str, Any]:
     """Evaluate a trained classifier on the test split."""
 
     predictions = model.predict(split.X_test)
-    probabilities = model.predict_proba(split.X_test)[:, 1]
+    if hasattr(model, "predict_proba"):
+        prediction_scores = model.predict_proba(split.X_test)[:, 1]
+    else:
+        prediction_scores = model.decision_function(split.X_test)
 
     return {
         "accuracy": accuracy_score(split.y_test, predictions),
         "precision": precision_score(split.y_test, predictions, zero_division=0),
         "recall": recall_score(split.y_test, predictions, zero_division=0),
         "f1": f1_score(split.y_test, predictions, zero_division=0),
-        "roc_auc": roc_auc_score(split.y_test, probabilities),
+        "roc_auc": roc_auc_score(split.y_test, prediction_scores),
         "confusion_matrix": confusion_matrix(split.y_test, predictions).tolist(),
         "test_rows": int(len(split.y_test)),
     }
@@ -126,6 +158,21 @@ def train_and_evaluate_random_forest(
     return metrics
 
 
+def train_and_evaluate_svm(
+    dataset_path: str | Path = DATASET_PATH,
+    metrics_path: str | Path = SVM_METRICS_PATH,
+    random_state: int = DEFAULT_RANDOM_STATE,
+) -> dict[str, Any]:
+    """Run the full linear SVM training and evaluation workflow."""
+
+    dataset = load_url_dataset(dataset_path)
+    split = make_train_test_split(dataset, random_state=random_state)
+    model = train_svm(split, random_state=random_state)
+    metrics = evaluate_classifier(model, split)
+    save_metrics(metrics, metrics_path)
+    return metrics
+
+
 def train_and_evaluate_model(
     model_name: str = DEFAULT_MODEL_NAME,
     dataset_path: str | Path = DATASET_PATH,
@@ -141,6 +188,10 @@ def train_and_evaluate_model(
     if model_name == "random_forest":
         output_path = metrics_path or RANDOM_FOREST_METRICS_PATH
         return train_and_evaluate_random_forest(dataset_path, output_path, random_state)
+
+    if model_name == "svm":
+        output_path = metrics_path or SVM_METRICS_PATH
+        return train_and_evaluate_svm(dataset_path, output_path, random_state)
 
     supported_models = ", ".join(sorted(MODEL_METRICS_PATHS))
     raise ValueError(f"Unsupported model '{model_name}'. Choose one of: {supported_models}")
