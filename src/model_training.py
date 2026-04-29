@@ -14,14 +14,17 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import LinearSVC
 
+from src.baseline import HEURISTIC_THRESHOLD, score_features
 from src.training import DATASET_PATH, DEFAULT_RANDOM_STATE, FeatureSplit, load_url_dataset, make_train_test_split
 
 
 LOGISTIC_REGRESSION_METRICS_PATH = Path("models/logistic_regression_metrics.json")
 RANDOM_FOREST_METRICS_PATH = Path("models/random_forest_metrics.json")
 SVM_METRICS_PATH = Path("models/svm_metrics.json")
+HEURISTIC_BASELINE_METRICS_PATH = Path("models/heuristic_baseline_metrics.json")
 DEFAULT_MODEL_NAME = "logistic_regression"
 MODEL_METRICS_PATHS = {
+    "heuristic_baseline": HEURISTIC_BASELINE_METRICS_PATH,
     "logistic_regression": LOGISTIC_REGRESSION_METRICS_PATH,
     "random_forest": RANDOM_FOREST_METRICS_PATH,
     "svm": SVM_METRICS_PATH,
@@ -120,6 +123,27 @@ def evaluate_classifier(model: Any, split: FeatureSplit) -> dict[str, Any]:
     }
 
 
+def evaluate_heuristic_baseline(split: FeatureSplit) -> dict[str, Any]:
+    """Evaluate the heuristic baseline on the same test split as the ML models."""
+
+    predictions = []
+    scores = []
+    for _, feature_row in split.X_test.iterrows():
+        score, _ = score_features(feature_row.to_dict())
+        scores.append(score)
+        predictions.append(int(score >= HEURISTIC_THRESHOLD))
+
+    return {
+        "accuracy": accuracy_score(split.y_test, predictions),
+        "precision": precision_score(split.y_test, predictions, zero_division=0),
+        "recall": recall_score(split.y_test, predictions, zero_division=0),
+        "f1": f1_score(split.y_test, predictions, zero_division=0),
+        "roc_auc": roc_auc_score(split.y_test, scores),
+        "confusion_matrix": confusion_matrix(split.y_test, predictions).tolist(),
+        "test_rows": int(len(split.y_test)),
+    }
+
+
 def save_metrics(metrics: dict[str, Any], path: str | Path) -> None:
     """Save evaluation metrics as JSON."""
 
@@ -139,6 +163,20 @@ def train_and_evaluate_logistic_regression(
     split = make_train_test_split(dataset, random_state=random_state)
     model = train_logistic_regression(split, random_state=random_state)
     metrics = evaluate_classifier(model, split)
+    save_metrics(metrics, metrics_path)
+    return metrics
+
+
+def evaluate_and_save_heuristic_baseline(
+    dataset_path: str | Path = DATASET_PATH,
+    metrics_path: str | Path = HEURISTIC_BASELINE_METRICS_PATH,
+    random_state: int = DEFAULT_RANDOM_STATE,
+) -> dict[str, Any]:
+    """Run heuristic baseline evaluation on the reproducible test split."""
+
+    dataset = load_url_dataset(dataset_path)
+    split = make_train_test_split(dataset, random_state=random_state)
+    metrics = evaluate_heuristic_baseline(split)
     save_metrics(metrics, metrics_path)
     return metrics
 
@@ -180,6 +218,10 @@ def train_and_evaluate_model(
     random_state: int = DEFAULT_RANDOM_STATE,
 ) -> dict[str, Any]:
     """Train and evaluate one of the supported Sprint 3 models."""
+
+    if model_name == "heuristic_baseline":
+        output_path = metrics_path or HEURISTIC_BASELINE_METRICS_PATH
+        return evaluate_and_save_heuristic_baseline(dataset_path, output_path, random_state)
 
     if model_name == "logistic_regression":
         output_path = metrics_path or LOGISTIC_REGRESSION_METRICS_PATH

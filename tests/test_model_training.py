@@ -8,7 +8,9 @@ from src.model_training import (
     build_logistic_regression_model,
     build_random_forest_model,
     build_svm_model,
+    evaluate_and_save_heuristic_baseline,
     evaluate_classifier,
+    evaluate_heuristic_baseline,
     save_metrics,
     train_and_evaluate_logistic_regression,
     train_and_evaluate_model,
@@ -81,6 +83,19 @@ class ModelTrainingTests(unittest.TestCase):
             self.assertIn("confusion_matrix", metrics)
             self.assertEqual(metrics["test_rows"], len(split.y_test))
 
+    def test_evaluate_heuristic_baseline_returns_metrics(self) -> None:
+        split = make_train_test_split(_sample_dataset(), test_size=0.33, random_state=3)
+
+        metrics = evaluate_heuristic_baseline(split)
+
+        self.assertIn("accuracy", metrics)
+        self.assertIn("precision", metrics)
+        self.assertIn("recall", metrics)
+        self.assertIn("f1", metrics)
+        self.assertIn("roc_auc", metrics)
+        self.assertIn("confusion_matrix", metrics)
+        self.assertEqual(metrics["test_rows"], len(split.y_test))
+
     def test_save_metrics_writes_json_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "metrics.json"
@@ -96,6 +111,21 @@ class ModelTrainingTests(unittest.TestCase):
             _sample_dataset().to_csv(dataset_path, index=False)
 
             metrics = train_and_evaluate_logistic_regression(
+                dataset_path=dataset_path,
+                metrics_path=metrics_path,
+                random_state=5,
+            )
+
+            self.assertTrue(metrics_path.exists())
+            self.assertEqual(metrics["test_rows"], 3)
+
+    def test_full_heuristic_baseline_workflow_writes_metrics(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_path = Path(temp_dir) / "dataset.csv"
+            metrics_path = Path(temp_dir) / "metrics.json"
+            _sample_dataset().to_csv(dataset_path, index=False)
+
+            metrics = evaluate_and_save_heuristic_baseline(
                 dataset_path=dataset_path,
                 metrics_path=metrics_path,
                 random_state=5,
