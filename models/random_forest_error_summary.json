@@ -1,0 +1,53 @@
+{
+  "total_errors": 1303,
+  "error_types": {
+    "false_negative": {
+      "count": 259,
+      "mean_features": {
+        "phishing_score": 0.2849,
+        "url_length": 34.0656,
+        "hostname_length": 18.7413,
+        "path_length": 6.0347,
+        "query_length": 1.4981,
+        "path_depth": 0.6525,
+        "query_parameter_count": 0.0695,
+        "subdomain_count": 0.6911,
+        "uses_https": 0.7452,
+        "has_ip_host": 0.0,
+        "has_port": 0.0039,
+        "has_query": 0.0347,
+        "digit_count": 0.3398,
+        "special_char_count": 6.8649,
+        "digit_ratio": 0.0056,
+        "special_char_ratio": 0.2102,
+        "hostname_digit_ratio": 0.0051,
+        "entropy": 3.9144,
+        "suspicious_keyword_count": 0.0154
+      }
+    },
+    "false_positive": {
+      "count": 1044,
+      "mean_features": {
+        "phishing_score": 0.6855,
+        "url_length": 35.8218,
+        "hostname_length": 22.273,
+        "path_length": 4.9885,
+        "query_length": 0.4454,
+        "path_depth": 0.4693,
+        "query_parameter_count": 0.0268,
+        "subdomain_count": 0.8621,
+        "uses_https": 0.9856,
+        "has_ip_host": 0.0,
+        "has_port": 0.001,
+        "has_query": 0.022,
+        "digit_count": 0.3889,
+        "special_char_count": 6.7443,
+        "digit_ratio": 0.0078,
+        "special_char_ratio": 0.1928,
+        "hostname_digit_ratio": 0.0055,
+        "entropy": 4.0403,
+        "suspicious_keyword_count": 0.0067
+      }
+    }
+  }
+}

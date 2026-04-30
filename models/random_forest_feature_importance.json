@@ -1,0 +1,114 @@
+[
+  {
+    "feature": "uses_https",
+    "importance": 0.22160153956665846
+  },
+  {
+    "feature": "entropy",
+    "importance": 0.12950941009350592
+  },
+  {
+    "feature": "digit_ratio",
+    "importance": 0.11336496355298174
+  },
+  {
+    "feature": "digit_count",
+    "importance": 0.09645217520191955
+  },
+  {
+    "feature": "url_length",
+    "importance": 0.05390781929908346
+  },
+  {
+    "feature": "path_length",
+    "importance": 0.052314342898322874
+  },
+  {
+    "feature": "special_char_ratio",
+    "importance": 0.05188387944753875
+  },
+  {
+    "feature": "letter_count",
+    "importance": 0.046211351303064675
+  },
+  {
+    "feature": "hyphen_count",
+    "importance": 0.04123291377976526
+  },
+  {
+    "feature": "hostname_length",
+    "importance": 0.035698672833093005
+  },
+  {
+    "feature": "dot_count",
+    "importance": 0.03434771363866133
+  },
+  {
+    "feature": "path_depth",
+    "importance": 0.025969331017514828
+  },
+  {
+    "feature": "subdomain_count",
+    "importance": 0.02454566484921356
+  },
+  {
+    "feature": "slash_count",
+    "importance": 0.020576597524491043
+  },
+  {
+    "feature": "special_char_count",
+    "importance": 0.01722560537642636
+  },
+  {
+    "feature": "hostname_digit_ratio",
+    "importance": 0.015285880590596991
+  },
+  {
+    "feature": "suspicious_keyword_count",
+    "importance": 0.0077358501505651895
+  },
+  {
+    "feature": "query_length",
+    "importance": 0.003960671531558492
+  },
+  {
+    "feature": "equals_count",
+    "importance": 0.0029244591638250984
+  },
+  {
+    "feature": "at_symbol_count",
+    "importance": 0.0010501303695839375
+  },
+  {
+    "feature": "query_parameter_count",
+    "importance": 0.0009003385691748327
+  },
+  {
+    "feature": "has_query",
+    "importance": 0.0008604146832437449
+  },
+  {
+    "feature": "underscore_count",
+    "importance": 0.0007414795673695056
+  },
+  {
+    "feature": "ampersand_count",
+    "importance": 0.0005873068297142742
+  },
+  {
+    "feature": "question_mark_count",
+    "importance": 0.0005091640318727002
+  },
+  {
+    "feature": "has_fragment",
+    "importance": 0.0004491514925672392
+  },
+  {
+    "feature": "has_ip_host",
+    "importance": 0.00010173823415019193
+  },
+  {
+    "feature": "has_port",
+    "importance": 5.14344035370524e-05
+  }
+]
