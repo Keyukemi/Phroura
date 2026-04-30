@@ -5,9 +5,11 @@ from pathlib import Path
 import pandas as pd
 
 from src.evaluation import (
+    build_model_comparison_rows,
     build_error_analysis_rows,
     extract_random_forest_feature_importance,
     make_url_feature_split,
+    save_model_comparison,
     save_error_summary,
     save_random_forest_feature_importance,
     save_random_forest_error_analysis,
@@ -176,6 +178,69 @@ class EvaluationTests(unittest.TestCase):
 
             self.assertTrue(output_path.exists())
             self.assertGreater(len(rows), 0)
+
+    def test_build_model_comparison_rows_sorts_by_f1(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            weak_path = Path(temp_dir) / "weak.json"
+            strong_path = Path(temp_dir) / "strong.json"
+            weak_path.write_text(
+                """
+{
+  "accuracy": 0.7,
+  "precision": 0.6,
+  "recall": 0.5,
+  "f1": 0.55,
+  "roc_auc": 0.8,
+  "confusion_matrix": [[7, 2], [3, 5]],
+  "test_rows": 17
+}
+""".strip(),
+                encoding="utf-8",
+            )
+            strong_path.write_text(
+                """
+{
+  "accuracy": 0.9,
+  "precision": 0.8,
+  "recall": 0.85,
+  "f1": 0.82,
+  "roc_auc": 0.95,
+  "confusion_matrix": [[9, 1], [1, 8]],
+  "test_rows": 19
+}
+""".strip(),
+                encoding="utf-8",
+            )
+
+            comparison = build_model_comparison_rows({"weak": weak_path, "strong": strong_path})
+
+            self.assertEqual(comparison.loc[0, "model"], "strong")
+            self.assertEqual(comparison.loc[0, "false_positives"], 1)
+            self.assertEqual(comparison.loc[0, "false_negatives"], 1)
+
+    def test_save_model_comparison_writes_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            metrics_path = Path(temp_dir) / "metrics.json"
+            output_path = Path(temp_dir) / "comparison.csv"
+            metrics_path.write_text(
+                """
+{
+  "accuracy": 0.9,
+  "precision": 0.8,
+  "recall": 0.85,
+  "f1": 0.82,
+  "roc_auc": 0.95,
+  "confusion_matrix": [[9, 1], [1, 8]],
+  "test_rows": 19
+}
+""".strip(),
+                encoding="utf-8",
+            )
+
+            comparison = save_model_comparison(output_path, {"model": metrics_path})
+
+            self.assertTrue(output_path.exists())
+            self.assertEqual(len(comparison), 1)
 
 
 if __name__ == "__main__":

@@ -12,13 +12,14 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 
 from src.features import FEATURE_NAMES, extract_feature_rows
-from src.model_training import train_random_forest
+from src.model_training import MODEL_METRICS_PATHS, train_random_forest
 from src.training import DATASET_PATH, DEFAULT_RANDOM_STATE, DEFAULT_TEST_SIZE, FeatureSplit, clean_url_dataset, load_url_dataset
 
 
 RANDOM_FOREST_ERROR_ANALYSIS_PATH = Path("models/random_forest_error_analysis.csv")
 RANDOM_FOREST_ERROR_SUMMARY_PATH = Path("models/random_forest_error_summary.json")
 RANDOM_FOREST_FEATURE_IMPORTANCE_PATH = Path("models/random_forest_feature_importance.json")
+MODEL_COMPARISON_PATH = Path("models/model_comparison.csv")
 ERROR_ANALYSIS_FEATURE_COLUMNS = [
     "url_length",
     "hostname_length",
@@ -230,6 +231,47 @@ def save_random_forest_feature_importance(
     return importance_rows
 
 
+def build_model_comparison_rows(
+    metric_paths: dict[str, str | Path] = MODEL_METRICS_PATHS,
+) -> pd.DataFrame:
+    """Build a comparison table from saved model metric JSON files."""
+
+    rows = []
+    for model_name, metric_path in metric_paths.items():
+        metrics = json.loads(Path(metric_path).read_text(encoding="utf-8"))
+        confusion = metrics["confusion_matrix"]
+        rows.append(
+            {
+                "model": model_name,
+                "accuracy": metrics["accuracy"],
+                "precision": metrics["precision"],
+                "recall": metrics["recall"],
+                "f1": metrics["f1"],
+                "roc_auc": metrics["roc_auc"],
+                "true_negatives": confusion[0][0],
+                "false_positives": confusion[0][1],
+                "false_negatives": confusion[1][0],
+                "true_positives": confusion[1][1],
+                "test_rows": metrics["test_rows"],
+            }
+        )
+
+    return pd.DataFrame(rows).sort_values("f1", ascending=False).reset_index(drop=True)
+
+
+def save_model_comparison(
+    output_path: str | Path = MODEL_COMPARISON_PATH,
+    metric_paths: dict[str, str | Path] = MODEL_METRICS_PATHS,
+) -> pd.DataFrame:
+    """Save a model comparison table as CSV."""
+
+    comparison = build_model_comparison_rows(metric_paths)
+    comparison_path = Path(output_path)
+    comparison_path.parent.mkdir(parents=True, exist_ok=True)
+    comparison.to_csv(comparison_path, index=False)
+    return comparison
+
+
 def _error_type(actual_label: int, predicted_label: int) -> str:
     if actual_label == 0 and predicted_label == 1:
         return "false_positive"
@@ -261,6 +303,11 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         help="Path where the Random Forest feature-importance JSON should be written.",
     )
     parser.add_argument(
+        "--comparison-output",
+        default=str(MODEL_COMPARISON_PATH),
+        help="Path where the generated model-comparison CSV should be written.",
+    )
+    parser.add_argument(
         "--random-state",
         type=int,
         default=DEFAULT_RANDOM_STATE,
@@ -284,9 +331,11 @@ def main() -> None:
         output_path=args.feature_importance_output,
         random_state=args.random_state,
     )
+    comparison = save_model_comparison(args.comparison_output)
     print(f"Saved {len(error_rows)} Random Forest errors to {args.output}")
     print(f"Saved Random Forest error summary to {args.summary_output}")
     print(f"Saved {len(importance_rows)} Random Forest feature importances to {args.feature_importance_output}")
+    print(f"Saved {len(comparison)} model comparison rows to {args.comparison_output}")
 
 
 if __name__ == "__main__":
