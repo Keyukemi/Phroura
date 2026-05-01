@@ -152,6 +152,7 @@ def _render_lexical_features_page() -> None:
         explainable, and computed directly from the URL string.
         """
     )
+    st.markdown('<div class="feature-table-section">', unsafe_allow_html=True)
     _render_feature_table(
         [
             {
@@ -163,6 +164,7 @@ def _render_lexical_features_page() -> None:
             for name, (category, meaning) in FEATURE_DETAILS.items()
         ]
     )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _render_model_limits_page() -> None:
@@ -201,9 +203,14 @@ def _render_model_limits_page() -> None:
 
     st.markdown(
         """
-        This limitation is important: lexical-only detection can miss phishing URLs that look structurally normal.
-        The app should be understood as a research prototype and decision-support tool, not a guarantee of safety.
-        """
+        <div class="limit-warning-wrap">
+            <p class="limit-warning">
+                This limitation is important: lexical-only detection can miss phishing URLs that look structurally normal.
+                The app should be understood as a research prototype and decision-support tool, not a guarantee of safety.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
 
@@ -391,6 +398,7 @@ def _inject_styles() -> None:
         :root {
             --phroura-pink: #FDEDEE;
             --phroura-green: #F1FAEE;
+            --phroura-red: #C44B4B;
             --phroura-charcoal: #333333;
             --phroura-slate: #F1F5F9;
             --phroura-navy: #0F1B2E;
@@ -399,36 +407,9 @@ def _inject_styles() -> None:
             --phroura-white: #FFFFFF;
         }
 
-        html,
-        body,
-        [data-testid="stAppViewContainer"] {
-            color: var(--phroura-charcoal);
-            background: var(--phroura-slate);
-        }
-
-        [data-testid="stHeader"] {
-            background: rgba(241, 245, 249, 0.92);
-        }
-
-        [data-testid="stSidebar"] {
-            background: var(--phroura-white);
-            border-right: 1px solid var(--phroura-border);
-        }
-
-        [data-testid="stSidebar"] h1,
-        [data-testid="stSidebar"] h2,
-        [data-testid="stSidebar"] h3,
-        [data-testid="stSidebar"] p {
-            color: var(--phroura-navy);
-        }
-
-        [data-testid="stSidebar"] label {
-            color: var(--phroura-charcoal);
-        }
-
         .block-container {
             max-width: 1120px;
-            padding: 2.25rem 2rem 3rem;
+            padding: 2rem 2rem 3rem;
         }
 
         h1 {
@@ -436,7 +417,7 @@ def _inject_styles() -> None:
             letter-spacing: 0;
             font-size: 2.6rem;
             line-height: 1.05;
-            margin-bottom: 0.25rem;
+            margin-bottom: 0.35rem;
         }
 
         h2,
@@ -447,15 +428,21 @@ def _inject_styles() -> None:
             letter-spacing: 0;
         }
 
+        div[data-testid="stVerticalBlock"] > div:has(.metric-card),
+        div[data-testid="stVerticalBlock"] > div:has(.signal-row),
+        div[data-testid="stVerticalBlock"] > div:has(.feature-table-wrap) {
+            margin-bottom: 0.4rem;
+        }
+
         [data-testid="stCaptionContainer"] {
             color: var(--phroura-muted);
         }
 
         [data-testid="stMetric"] {
-            min-height: 86px;
+            min-height: 88px;
             border: 1px solid var(--phroura-border);
             border-radius: 8px;
-            padding: 14px 16px;
+            padding: 14px 16px 12px;
             background: var(--phroura-white);
             box-shadow: 0 1px 2px rgba(15, 27, 46, 0.04);
         }
@@ -469,12 +456,15 @@ def _inject_styles() -> None:
         }
 
         .metric-card {
-            min-height: 112px;
+            min-height: 116px;
             border: 1px solid var(--phroura-border);
             border-radius: 8px;
-            padding: 18px;
+            padding: 18px 18px 16px;
             background: var(--phroura-white);
             box-shadow: 0 1px 2px rgba(15, 27, 46, 0.04);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }
 
         .metric-card strong {
@@ -506,7 +496,7 @@ def _inject_styles() -> None:
         .reason-row {
             border: 1px solid var(--phroura-border);
             border-radius: 8px;
-            padding: 12px 14px;
+            padding: 12px 14px 11px;
             margin-bottom: 10px;
             background: var(--phroura-white);
             box-shadow: 0 1px 2px rgba(15, 27, 46, 0.03);
@@ -546,12 +536,17 @@ def _inject_styles() -> None:
             box-shadow: 0 1px 2px rgba(15, 27, 46, 0.04);
         }
 
+        .feature-table-section {
+            margin-top: 1rem;
+        }
+
         .feature-table {
             width: 100%;
             border-collapse: collapse;
             color: var(--phroura-charcoal);
             background: var(--phroura-white);
-            font-size: 0.92rem;
+            font-size: 0.91rem;
+            table-layout: fixed;
         }
 
         .feature-table th {
@@ -570,6 +565,27 @@ def _inject_styles() -> None:
             padding: 12px 14px;
             border-bottom: 1px solid #E5EAF0;
             vertical-align: top;
+            overflow-wrap: anywhere;
+        }
+
+        .feature-table th:nth-child(1),
+        .feature-table td:nth-child(1) {
+            width: 22%;
+        }
+
+        .feature-table th:nth-child(2),
+        .feature-table td:nth-child(2) {
+            width: 13%;
+        }
+
+        .feature-table th:nth-child(3),
+        .feature-table td:nth-child(3) {
+            width: 16%;
+        }
+
+        .feature-table th:nth-child(4),
+        .feature-table td:nth-child(4) {
+            width: 49%;
         }
 
         .feature-table tr:last-child td {
@@ -577,20 +593,16 @@ def _inject_styles() -> None:
         }
 
         .feature-name {
-            min-width: 160px;
             color: var(--phroura-navy);
             font-weight: 700;
         }
 
         .feature-value {
-            min-width: 96px;
             color: var(--phroura-charcoal);
             font-variant-numeric: tabular-nums;
-            white-space: nowrap;
         }
 
         .feature-meaning {
-            min-width: 280px;
             color: var(--phroura-charcoal);
         }
 
@@ -612,7 +624,7 @@ def _inject_styles() -> None:
             display: grid;
             grid-template-columns: repeat(4, minmax(0, 1fr));
             gap: 12px;
-            margin: 16px 0 24px;
+            margin: 16px 0 1.5rem;
         }
 
         .flow-step,
@@ -638,24 +650,35 @@ def _inject_styles() -> None:
             line-height: 1.5;
         }
 
-        .muted {
-            color: var(--phroura-muted);
+        .limit-warning-wrap {
+            padding-top: 1.4rem;
         }
 
-        div[data-testid="stTextInput"] input,
-        div[data-testid="stSelectbox"] div[data-baseweb="select"] > div {
-            border-color: var(--phroura-border);
-            background-color: var(--phroura-white);
-            color: var(--phroura-charcoal);
+        .limit-warning {
+            margin: 0;
+            color: var(--phroura-red);
+            font-style: italic;
+            font-weight: 700;
+            line-height: 1.55;
+        }
+
+        .muted {
+            color: var(--phroura-muted);
         }
 
         div[data-testid="stAlert"] {
             border-radius: 8px;
         }
 
+        @media (max-width: 980px) {
+            .flow-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
         @media (max-width: 760px) {
             .block-container {
-                padding: 1.4rem 1rem 2rem;
+                padding: 1.25rem 1rem 2rem;
             }
 
             h1 {
@@ -681,6 +704,12 @@ def _inject_styles() -> None:
 
             .feature-table-wrap {
                 max-height: 520px;
+                margin-top: 0.35rem;
+            }
+
+            .feature-table-section {
+                margin-top: 1.15rem;
+                padding: 0 0.15rem;
             }
 
             .feature-table,
@@ -697,7 +726,7 @@ def _inject_styles() -> None:
             }
 
             .feature-table tr {
-                padding: 12px;
+                padding: 14px;
                 border-bottom: 1px solid var(--phroura-border);
             }
 
@@ -706,9 +735,10 @@ def _inject_styles() -> None:
             }
 
             .feature-table td {
+                width: auto !important;
                 min-width: 0;
                 border-bottom: 0;
-                padding: 4px 0;
+                padding: 5px 0;
                 white-space: normal;
             }
 
@@ -735,6 +765,10 @@ def _inject_styles() -> None:
 
             .feature-table td:nth-child(4)::before {
                 content: "Meaning";
+            }
+
+            .limit-warning-wrap {
+                padding-top: 1.6rem;
             }
         }
         </style>
