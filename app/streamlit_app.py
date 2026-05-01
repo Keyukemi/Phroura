@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from html import escape
 import sys
 from pathlib import Path
 
@@ -13,6 +14,17 @@ if str(ROOT_DIR) not in sys.path:
 
 from src.inference import DEFAULT_MODEL_PATH, DEFAULT_PHISHING_THRESHOLD, load_model_artifact, predict_url
 
+
+PAGE_CHECK_URL = "Check URL"
+PAGE_HOW_IT_WORKS = "How It Works"
+PAGE_LEXICAL_FEATURES = "Lexical Features"
+PAGE_MODEL_LIMITS = "Model & Limits"
+NAVIGATION_PAGES = (
+    PAGE_CHECK_URL,
+    PAGE_HOW_IT_WORKS,
+    PAGE_LEXICAL_FEATURES,
+    PAGE_MODEL_LIMITS,
+)
 
 EXAMPLE_URLS = {
     "University homepage": "https://www.rmit.edu.au/",
@@ -65,6 +77,24 @@ def main() -> None:
     st.title("Phroura")
     st.caption("Lexical URL phishing detection with a Random Forest classifier")
 
+    page = _render_navigation()
+    if page == PAGE_CHECK_URL:
+        _render_check_url_page()
+    elif page == PAGE_HOW_IT_WORKS:
+        _render_how_it_works_page()
+    elif page == PAGE_LEXICAL_FEATURES:
+        _render_lexical_features_page()
+    else:
+        _render_model_limits_page()
+
+
+def _render_navigation() -> str:
+    st.sidebar.title("Phroura")
+    st.sidebar.caption("Project demo")
+    return st.sidebar.radio("Navigate", NAVIGATION_PAGES, label_visibility="collapsed")
+
+
+def _render_check_url_page() -> None:
     artifact = _load_artifact()
     if artifact is None:
         return
@@ -82,6 +112,99 @@ def main() -> None:
         _render_empty_state()
 
     _render_scope_note()
+
+
+def _render_how_it_works_page() -> None:
+    st.subheader("How It Works")
+    st.markdown(
+        """
+        Phroura classifies a submitted URL using lexical signals: measurements taken from the URL text itself.
+        The app does not visit the webpage or call an external reputation service.
+        """
+    )
+    st.markdown(
+        """
+        <div class="flow-grid">
+            <div class="flow-step"><strong>1. URL input</strong><span>The user submits a raw URL string.</span></div>
+            <div class="flow-step"><strong>2. Feature extraction</strong><span>The URL is converted into numeric lexical features.</span></div>
+            <div class="flow-step"><strong>3. Random Forest</strong><span>The trained model estimates phishing probability.</span></div>
+            <div class="flow-step"><strong>4. App output</strong><span>The UI shows classification, probability, and explanation signals.</span></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.subheader("Prediction Output")
+    st.markdown(
+        """
+        The classification is based on whether the Random Forest phishing probability is greater than or equal to
+        the decision threshold. The rule-based notes are shown alongside the model output to make suspicious URL
+        patterns easier to inspect.
+        """
+    )
+
+
+def _render_lexical_features_page() -> None:
+    st.subheader("Lexical Features")
+    st.markdown(
+        """
+        These are the 28 features extracted from each URL before prediction. They are intentionally lightweight,
+        explainable, and computed directly from the URL string.
+        """
+    )
+    _render_feature_table(
+        [
+            {
+                "Feature": _display_name(name),
+                "Value": "computed per URL",
+                "Category": category,
+                "Meaning": meaning,
+            }
+            for name, (category, meaning) in FEATURE_DETAILS.items()
+        ]
+    )
+
+
+def _render_model_limits_page() -> None:
+    st.subheader("Model & Limits")
+    st.markdown(
+        """
+        The deployment model is a Random Forest classifier selected after comparing the heuristic baseline,
+        Logistic Regression, Random Forest, and SVM on the same train/test split. Random Forest was selected
+        because it had the strongest overall F1-score and ROC-AUC in the project evaluation artifacts.
+        """
+    )
+
+    model_column, limit_column = st.columns(2, gap="large")
+    with model_column:
+        st.markdown(
+            """
+            <div class="info-panel">
+                <strong>What the probability means</strong>
+                <span>The model returns an estimated phishing probability. At the default 0.50 threshold,
+                probabilities of 50% or higher are classified as phishing.</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with limit_column:
+        st.markdown(
+            """
+            <div class="info-panel">
+                <strong>What the model does not inspect</strong>
+                <span>It does not inspect page content, redirects, WHOIS records, blacklist membership,
+                domain age, hosting reputation, or live threat intelligence.</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        """
+        This limitation is important: lexical-only detection can miss phishing URLs that look structurally normal.
+        The app should be understood as a research prototype and decision-support tool, not a guarantee of safety.
+        """
+    )
 
 
 @st.cache_resource(show_spinner=False)
@@ -188,18 +311,7 @@ def _render_prediction(url: str, artifact: dict) -> None:
 
     with st.expander("Extracted feature values"):
         st.caption("All lexical features used by the model for this URL.")
-        st.dataframe(
-            _feature_table_rows(result["features"]),
-            hide_index=True,
-            width="stretch",
-            height=430,
-            column_config={
-                "Feature": st.column_config.TextColumn("Feature", width="medium"),
-                "Value": st.column_config.TextColumn("Value", width="small"),
-                "Category": st.column_config.TextColumn("Category", width="small"),
-                "Meaning": st.column_config.TextColumn("Meaning", width="large"),
-            },
-        )
+        _render_feature_table(_feature_table_rows(result["features"]))
 
 
 def _render_empty_state() -> None:
@@ -240,6 +352,38 @@ def _feature_table_rows(features: dict[str, int | float]) -> list[dict[str, str]
     return rows
 
 
+def _render_feature_table(rows: list[dict[str, str]]) -> None:
+    body_rows = "\n".join(
+        f"""
+        <tr>
+            <td class="feature-name">{escape(row["Feature"])}</td>
+            <td class="feature-value">{escape(row["Value"])}</td>
+            <td><span class="feature-badge">{escape(row["Category"])}</span></td>
+            <td class="feature-meaning">{escape(row["Meaning"])}</td>
+        </tr>
+        """
+        for row in rows
+    )
+    st.markdown(
+        f"""
+        <div class="feature-table-wrap">
+            <table class="feature-table">
+                <thead>
+                    <tr>
+                        <th>Feature</th>
+                        <th>Value</th>
+                        <th>Category</th>
+                        <th>Meaning</th>
+                    </tr>
+                </thead>
+                <tbody>{body_rows}</tbody>
+            </table>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _inject_styles() -> None:
     st.markdown(
         """
@@ -264,6 +408,22 @@ def _inject_styles() -> None:
 
         [data-testid="stHeader"] {
             background: rgba(241, 245, 249, 0.92);
+        }
+
+        [data-testid="stSidebar"] {
+            background: var(--phroura-white);
+            border-right: 1px solid var(--phroura-border);
+        }
+
+        [data-testid="stSidebar"] h1,
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3,
+        [data-testid="stSidebar"] p {
+            color: var(--phroura-navy);
+        }
+
+        [data-testid="stSidebar"] label {
+            color: var(--phroura-charcoal);
         }
 
         .block-container {
@@ -377,6 +537,107 @@ def _inject_styles() -> None:
             color: var(--phroura-charcoal);
         }
 
+        .feature-table-wrap {
+            max-height: 440px;
+            overflow: auto;
+            border: 1px solid var(--phroura-border);
+            border-radius: 8px;
+            background: var(--phroura-white);
+            box-shadow: 0 1px 2px rgba(15, 27, 46, 0.04);
+        }
+
+        .feature-table {
+            width: 100%;
+            border-collapse: collapse;
+            color: var(--phroura-charcoal);
+            background: var(--phroura-white);
+            font-size: 0.92rem;
+        }
+
+        .feature-table th {
+            position: sticky;
+            top: 0;
+            z-index: 1;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--phroura-border);
+            background: var(--phroura-slate);
+            color: var(--phroura-navy);
+            font-weight: 700;
+            text-align: left;
+        }
+
+        .feature-table td {
+            padding: 12px 14px;
+            border-bottom: 1px solid #E5EAF0;
+            vertical-align: top;
+        }
+
+        .feature-table tr:last-child td {
+            border-bottom: 0;
+        }
+
+        .feature-name {
+            min-width: 160px;
+            color: var(--phroura-navy);
+            font-weight: 700;
+        }
+
+        .feature-value {
+            min-width: 96px;
+            color: var(--phroura-charcoal);
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+
+        .feature-meaning {
+            min-width: 280px;
+            color: var(--phroura-charcoal);
+        }
+
+        .feature-badge {
+            display: inline-flex;
+            align-items: center;
+            min-height: 24px;
+            border: 1px solid #D9E5D5;
+            border-radius: 999px;
+            padding: 2px 9px;
+            background: var(--phroura-green);
+            color: var(--phroura-navy);
+            font-size: 0.8rem;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .flow-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            margin: 16px 0 24px;
+        }
+
+        .flow-step,
+        .info-panel {
+            border: 1px solid var(--phroura-border);
+            border-radius: 8px;
+            padding: 16px;
+            background: var(--phroura-white);
+            box-shadow: 0 1px 2px rgba(15, 27, 46, 0.04);
+        }
+
+        .flow-step strong,
+        .info-panel strong {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--phroura-navy);
+        }
+
+        .flow-step span,
+        .info-panel span {
+            display: block;
+            color: var(--phroura-charcoal);
+            line-height: 1.5;
+        }
+
         .muted {
             color: var(--phroura-muted);
         }
@@ -412,6 +673,68 @@ def _inject_styles() -> None:
 
             .signal-row {
                 grid-template-columns: minmax(0, 1fr);
+            }
+
+            .flow-grid {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .feature-table-wrap {
+                max-height: 520px;
+            }
+
+            .feature-table,
+            .feature-table thead,
+            .feature-table tbody,
+            .feature-table th,
+            .feature-table td,
+            .feature-table tr {
+                display: block;
+            }
+
+            .feature-table thead {
+                display: none;
+            }
+
+            .feature-table tr {
+                padding: 12px;
+                border-bottom: 1px solid var(--phroura-border);
+            }
+
+            .feature-table tr:last-child {
+                border-bottom: 0;
+            }
+
+            .feature-table td {
+                min-width: 0;
+                border-bottom: 0;
+                padding: 4px 0;
+                white-space: normal;
+            }
+
+            .feature-table td::before {
+                display: block;
+                margin-bottom: 2px;
+                color: var(--phroura-muted);
+                font-size: 0.76rem;
+                font-weight: 700;
+                text-transform: uppercase;
+            }
+
+            .feature-table td:nth-child(1)::before {
+                content: "Feature";
+            }
+
+            .feature-table td:nth-child(2)::before {
+                content: "Value";
+            }
+
+            .feature-table td:nth-child(3)::before {
+                content: "Category";
+            }
+
+            .feature-table td:nth-child(4)::before {
+                content: "Meaning";
             }
         }
         </style>
