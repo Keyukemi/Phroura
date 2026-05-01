@@ -8,7 +8,7 @@ The goal of this project is to design, implement, and evaluate a phishing detect
 
 ## Current Status
 
-Phroura has completed Sprint 5 and is entering Sprint 6 report drafting and evidence collection. The project now includes:
+The project now includes:
 
 - lexical URL feature extraction
 - heuristic phishing baseline
