@@ -6,7 +6,21 @@ Phroura is a master's-level computer science project developed in fulfillment of
 
 The goal of this project is to design, implement, and evaluate a phishing detection platform that can classify suspicious URLs in real time using lightweight, explainable methods.
 
-## Planned Repository Structure
+## Current Status
+
+Phroura has completed Sprint 5 and is entering Sprint 6 report drafting and evidence collection. The project now includes:
+
+- lexical URL feature extraction
+- heuristic phishing baseline
+- reproducible train/test splitting
+- Logistic Regression, Random Forest, and SVM model evaluation
+- Random Forest deployment model artifact
+- backend inference pipeline
+- Streamlit demo app with prediction output and explanation support
+
+Random Forest is the selected deployment candidate based on the Sprint 4 evaluation results.
+
+## Repository Structure
 
 - `app/` - Streamlit interface and user-facing application code
 - `data/` - dataset files and dataset notes
@@ -14,9 +28,75 @@ The goal of this project is to design, implement, and evaluate a phishing detect
 - `notebooks/` - exploratory analysis and experiments
 - `src/` - core source code for features, training, evaluation, and inference
 - `tests/` - tests for feature extraction, inference, and other core logic
-- `docs/` - private planning and learning documents
 
-## Planned Core Workflows
+## Setup
+
+Install project dependencies:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+## Run Tests
+
+```bash
+python3 -m unittest discover -s tests
+```
+
+## Run The Streamlit App
+
+```bash
+python3 -m streamlit run app/streamlit_app.py
+```
+
+Then open the local URL shown by Streamlit, usually:
+
+```text
+http://localhost:8501
+```
+
+The app lets a user submit a URL and returns:
+
+- benign or phishing classification
+- Random Forest phishing probability
+- heuristic rule-based notes
+- top model feature signals
+- full lexical feature table
+- explanation pages for the pipeline, features, model, and limitations
+
+## Model Artifact
+
+The hosted demo uses:
+
+```text
+models/random_forest_model.joblib
+```
+
+This file is intentionally committed so the Streamlit app can run immediately without retraining the model during deployment.
+
+To regenerate the model artifact from the local dataset:
+
+```bash
+python3 -m src.inference --save-model
+```
+
+The local training dataset is expected at:
+
+```text
+data/Dataset.csv
+```
+
+The dataset file is ignored by Git because it is a local data dependency.
+
+## Command-Line Prediction
+
+After the model artifact exists, a URL can be classified from the terminal:
+
+```bash
+python3 -m src.inference --url https://www.rmit.edu.au/
+```
+
+## Core Workflows
 
 1. Select and document phishing and benign URL datasets.
 2. Extract lexical and structural features from URLs.
@@ -24,6 +104,8 @@ The goal of this project is to design, implement, and evaluate a phishing detect
 4. Integrate the selected model into a usable application.
 5. Evaluate the system and document the results in the final report.
 
-## Status
+## Scope And Limitations
 
-Sprint 2 now has a working lexical feature extraction module, representative tests, and sample feature output generated from raw URLs.
+Phroura uses lexical URL features only. It does not inspect webpage content, redirect behavior, WHOIS records, domain reputation, blacklist membership, or live threat intelligence.
+
+This means the system should be understood as a research prototype and decision-support tool, not a guarantee that a URL is safe or unsafe.
