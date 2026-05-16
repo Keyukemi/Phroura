@@ -12,7 +12,9 @@ from src.evaluation import (
     build_feature_importance_table,
     build_model_comparison_rows,
     build_error_analysis_rows,
+    build_multisource_retraining_results,
     build_random_forest_tuning_results,
+    build_threshold_sweep_results,
     extract_random_forest_feature_importance,
     make_url_feature_split,
     save_cross_validation_results,
@@ -20,6 +22,7 @@ from src.evaluation import (
     save_external_validation_results,
     save_feature_ablation_results,
     save_feature_importance_table,
+    save_multisource_retraining_results,
     save_model_comparison,
     save_error_summary,
     save_random_forest_tuning_results,
@@ -521,6 +524,138 @@ class EvaluationTests(unittest.TestCase):
             self.assertTrue(summary_path.exists())
             self.assertEqual(list(pd.read_csv(results_path).columns), list(results.columns))
             self.assertEqual(summary["rows"], 2)
+
+    def test_build_threshold_sweep_results_returns_metric_rows(self) -> None:
+        labels = pd.Series([0, 1, 1, 0])
+        probabilities = pd.Series([0.1, 0.8, 0.4, 0.6])
+
+        sweep = build_threshold_sweep_results(labels, probabilities, threshold_values=(0.3, 0.5))
+
+        self.assertEqual(list(sweep["threshold"]), [0.3, 0.5])
+        self.assertIn("precision", sweep.columns)
+        self.assertIn("recall", sweep.columns)
+        self.assertIn("f1", sweep.columns)
+
+    def test_build_multisource_retraining_results_returns_sweep_comparison_and_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_path = Path(temp_dir) / "original.csv"
+            external_train_path = Path(temp_dir) / "external_train.csv"
+            external_test_path = Path(temp_dir) / "external_test.csv"
+            best_params_path = Path(temp_dir) / "best_params.json"
+            _sample_dataset().to_csv(original_path, index=False)
+            pd.DataFrame(
+                {
+                    "url": [
+                        "https://www.example.edu/",
+                        "http://verify-login.example.test/account",
+                        "https://www.university.edu/",
+                        "http://192.168.0.55/password",
+                    ],
+                    "status": ["legitimate", "phishing", "legitimate", "phishing"],
+                }
+            ).to_csv(external_train_path, index=False)
+            pd.DataFrame(
+                {
+                    "url": [
+                        "https://www.rmit.edu.au/",
+                        "http://192.168.0.10/account",
+                    ],
+                    "status": ["legitimate", "phishing"],
+                }
+            ).to_csv(external_test_path, index=False)
+            best_params_path.write_text(
+                """
+{
+  "best_params": {
+    "n_estimators": 10,
+    "min_samples_split": 2,
+    "min_samples_leaf": 1,
+    "max_depth": 4,
+    "class_weight": "balanced"
+  }
+}
+""".strip(),
+                encoding="utf-8",
+            )
+
+            _, sweep, comparison, summary = build_multisource_retraining_results(
+                original_dataset_path=original_path,
+                external_train_path=external_train_path,
+                external_test_path=external_test_path,
+                best_params_path=best_params_path,
+                threshold_values=(0.3, 0.5),
+                random_state=5,
+            )
+
+            self.assertEqual(len(sweep), 2)
+            self.assertEqual(len(comparison), 3)
+            self.assertEqual(summary["external_test_rows"], 2)
+            self.assertIn("best_f1_threshold", summary)
+
+    def test_save_multisource_retraining_results_writes_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_path = Path(temp_dir) / "original.csv"
+            external_train_path = Path(temp_dir) / "external_train.csv"
+            external_test_path = Path(temp_dir) / "external_test.csv"
+            best_params_path = Path(temp_dir) / "best_params.json"
+            model_path = Path(temp_dir) / "model.joblib"
+            threshold_path = Path(temp_dir) / "thresholds.csv"
+            comparison_path = Path(temp_dir) / "comparison.csv"
+            summary_path = Path(temp_dir) / "summary.json"
+            _sample_dataset().to_csv(original_path, index=False)
+            pd.DataFrame(
+                {
+                    "url": [
+                        "https://www.example.edu/",
+                        "http://verify-login.example.test/account",
+                    ],
+                    "status": ["legitimate", "phishing"],
+                }
+            ).to_csv(external_train_path, index=False)
+            pd.DataFrame(
+                {
+                    "url": [
+                        "https://www.rmit.edu.au/",
+                        "http://192.168.0.10/account",
+                    ],
+                    "status": ["legitimate", "phishing"],
+                }
+            ).to_csv(external_test_path, index=False)
+            best_params_path.write_text(
+                """
+{
+  "best_params": {
+    "n_estimators": 10,
+    "min_samples_split": 2,
+    "min_samples_leaf": 1,
+    "max_depth": 4,
+    "class_weight": "balanced"
+  }
+}
+""".strip(),
+                encoding="utf-8",
+            )
+
+            sweep, comparison, summary = save_multisource_retraining_results(
+                original_dataset_path=original_path,
+                external_train_path=external_train_path,
+                external_test_path=external_test_path,
+                best_params_path=best_params_path,
+                model_output_path=model_path,
+                threshold_output_path=threshold_path,
+                comparison_output_path=comparison_path,
+                summary_output_path=summary_path,
+                threshold_values=(0.3, 0.5),
+                random_state=5,
+            )
+
+            self.assertTrue(model_path.exists())
+            self.assertTrue(threshold_path.exists())
+            self.assertTrue(comparison_path.exists())
+            self.assertTrue(summary_path.exists())
+            self.assertEqual(len(sweep), 2)
+            self.assertEqual(len(comparison), 3)
+            self.assertEqual(summary["external_test_rows"], 2)
 
 
 if __name__ == "__main__":

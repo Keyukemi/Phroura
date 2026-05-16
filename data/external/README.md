@@ -20,6 +20,7 @@ Purpose:
 - external adversarial-style robustness testing
 - selection of phishing URLs with obfuscation or evasion indicators
 - balanced external validation using both phishing and legitimate URLs
+- multi-source retraining using the train split
 
 The external dataset's precomputed feature columns are not used for Phroura prediction. They are used only to select adversarial-style rows. Phroura re-runs its own lexical feature extractor on the raw URL strings before prediction.
 
@@ -43,3 +44,12 @@ The current Phase 3 external validation artifact uses the full test split:
 1886 phishing rows
 1886 legitimate rows
 ```
+
+The current Phase 3 multi-source model uses:
+
+```text
+URL-Phish original training data
+pirocheto/phishing-url train split
+```
+
+It is evaluated on the held-out `pirocheto/phishing-url` test split.

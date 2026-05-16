@@ -14,7 +14,7 @@ from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold, cross_v
 
 from src.baseline import HEURISTIC_THRESHOLD, score_features
 from src.features import FEATURE_NAMES, extract_feature_rows
-from src.inference import DEFAULT_MODEL_PATH, DEFAULT_PHISHING_THRESHOLD, load_model_artifact
+from src.inference import DEFAULT_MODEL_PATH, DEFAULT_PHISHING_THRESHOLD, build_model_artifact, load_model_artifact, save_model_artifact
 from src.model_training import (
     MODEL_METRICS_PATHS,
     build_logistic_regression_model,
@@ -46,6 +46,11 @@ ADVERSARIAL_TEST_RESULTS_PATH = Path("models/adversarial_test_results.csv")
 ADVERSARIAL_TEST_SUMMARY_PATH = Path("models/adversarial_test_summary.json")
 EXTERNAL_VALIDATION_RESULTS_PATH = Path("models/external_validation_results.csv")
 EXTERNAL_VALIDATION_SUMMARY_PATH = Path("models/external_validation_summary.json")
+MULTISOURCE_MODEL_PATH = Path("models/multisource_random_forest_model.joblib")
+THRESHOLD_SWEEP_RESULTS_PATH = Path("models/threshold_sweep_results.csv")
+MULTISOURCE_MODEL_COMPARISON_PATH = Path("models/multisource_model_comparison.csv")
+MULTISOURCE_EXTERNAL_VALIDATION_SUMMARY_PATH = Path("models/multisource_external_validation_summary.json")
+DEFAULT_THRESHOLD_VALUES = (0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70)
 CV_SCORING = {
     "precision": "precision",
     "recall": "recall",
@@ -901,6 +906,140 @@ def save_external_validation_results(
     return results, summary
 
 
+def build_multisource_retraining_results(
+    original_dataset_path: str | Path = DATASET_PATH,
+    external_train_path: str | Path = "data/external/pirocheto_phishing_url_train.parquet",
+    external_test_path: str | Path = "data/external/pirocheto_phishing_url_test.parquet",
+    best_params_path: str | Path = RANDOM_FOREST_BEST_PARAMS_PATH,
+    threshold_values: tuple[float, ...] = DEFAULT_THRESHOLD_VALUES,
+    random_state: int = DEFAULT_RANDOM_STATE,
+) -> tuple[Any, pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    """Train a tuned Random Forest on original plus external URLs and sweep thresholds."""
+
+    original_dataset = load_url_dataset(original_dataset_path)
+    external_train = _external_dataset_to_url_label_dataset(external_train_path)
+    combined_dataset = clean_url_dataset(pd.concat([original_dataset, external_train], ignore_index=True))
+    features, labels = build_feature_matrix(combined_dataset)
+
+    best_params = json.loads(Path(best_params_path).read_text(encoding="utf-8"))["best_params"]
+    model = build_random_forest_model(random_state=random_state)
+    model.set_params(**best_params)
+    model.fit(features, labels)
+
+    external_test = _external_dataset_to_url_label_dataset(external_test_path)
+    test_features, test_labels = build_feature_matrix(external_test)
+    probabilities = model.predict_proba(test_features)[:, 1]
+    threshold_sweep = build_threshold_sweep_results(test_labels, probabilities, threshold_values)
+    best_threshold_row = threshold_sweep.sort_values(["f1", "recall"], ascending=False).iloc[0]
+    default_threshold_row = threshold_sweep[threshold_sweep["threshold"] == DEFAULT_PHISHING_THRESHOLD]
+    if default_threshold_row.empty:
+        default_threshold_row = threshold_sweep.iloc[[0]]
+
+    heuristic_predictions = []
+    heuristic_scores = []
+    for _, feature_row in test_features.iterrows():
+        score, _ = score_features(feature_row.to_dict())
+        heuristic_scores.append(score)
+        heuristic_predictions.append(int(score >= HEURISTIC_THRESHOLD))
+
+    comparison = pd.DataFrame(
+        [
+            {
+                "model": "multisource_random_forest_default_threshold",
+                "threshold": float(default_threshold_row.iloc[0]["threshold"]),
+                "accuracy": float(default_threshold_row.iloc[0]["accuracy"]),
+                "precision": float(default_threshold_row.iloc[0]["precision"]),
+                "recall": float(default_threshold_row.iloc[0]["recall"]),
+                "f1": float(default_threshold_row.iloc[0]["f1"]),
+                "roc_auc": float(default_threshold_row.iloc[0]["roc_auc"]),
+            },
+            {
+                "model": "multisource_random_forest_best_f1_threshold",
+                "threshold": float(best_threshold_row["threshold"]),
+                "accuracy": float(best_threshold_row["accuracy"]),
+                "precision": float(best_threshold_row["precision"]),
+                "recall": float(best_threshold_row["recall"]),
+                "f1": float(best_threshold_row["f1"]),
+                "roc_auc": float(best_threshold_row["roc_auc"]),
+            },
+            {
+                "model": "heuristic_baseline",
+                "threshold": float(HEURISTIC_THRESHOLD),
+                **_prediction_summary(test_labels, pd.Series(heuristic_predictions), None),
+            },
+        ]
+    )
+
+    summary = _json_ready({
+        "original_training_rows": int(len(original_dataset)),
+        "external_training_rows": int(len(external_train)),
+        "combined_training_rows": int(len(combined_dataset)),
+        "external_test_rows": int(len(external_test)),
+        "phishing_test_rows": int((test_labels == 1).sum()),
+        "benign_test_rows": int((test_labels == 0).sum()),
+        "best_params": _json_ready(best_params),
+        "default_threshold": comparison.iloc[0].to_dict(),
+        "best_f1_threshold": comparison.iloc[1].to_dict(),
+        "heuristic_baseline": comparison.iloc[2].to_dict(),
+    })
+    return model, threshold_sweep, comparison, summary
+
+
+def build_threshold_sweep_results(
+    labels: pd.Series,
+    probabilities: Any,
+    threshold_values: tuple[float, ...] = DEFAULT_THRESHOLD_VALUES,
+) -> pd.DataFrame:
+    """Evaluate classification metrics over a set of probability thresholds."""
+
+    rows = []
+    for threshold in threshold_values:
+        predictions = pd.Series([int(probability >= threshold) for probability in probabilities])
+        row = {
+            "threshold": float(threshold),
+            **_prediction_summary(labels, predictions, pd.Series(probabilities)),
+        }
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def save_multisource_retraining_results(
+    original_dataset_path: str | Path = DATASET_PATH,
+    external_train_path: str | Path = "data/external/pirocheto_phishing_url_train.parquet",
+    external_test_path: str | Path = "data/external/pirocheto_phishing_url_test.parquet",
+    best_params_path: str | Path = RANDOM_FOREST_BEST_PARAMS_PATH,
+    model_output_path: str | Path = MULTISOURCE_MODEL_PATH,
+    threshold_output_path: str | Path = THRESHOLD_SWEEP_RESULTS_PATH,
+    comparison_output_path: str | Path = MULTISOURCE_MODEL_COMPARISON_PATH,
+    summary_output_path: str | Path = MULTISOURCE_EXTERNAL_VALIDATION_SUMMARY_PATH,
+    threshold_values: tuple[float, ...] = DEFAULT_THRESHOLD_VALUES,
+    random_state: int = DEFAULT_RANDOM_STATE,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    """Save multi-source model, threshold sweep, comparison, and summary artifacts."""
+
+    model, threshold_sweep, comparison, summary = build_multisource_retraining_results(
+        original_dataset_path=original_dataset_path,
+        external_train_path=external_train_path,
+        external_test_path=external_test_path,
+        best_params_path=best_params_path,
+        threshold_values=threshold_values,
+        random_state=random_state,
+    )
+    model_path = Path(model_output_path)
+    threshold_path = Path(threshold_output_path)
+    comparison_path = Path(comparison_output_path)
+    summary_path = Path(summary_output_path)
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    threshold_path.parent.mkdir(parents=True, exist_ok=True)
+    comparison_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    save_model_artifact(build_model_artifact(model), model_path)
+    threshold_sweep.to_csv(threshold_path, index=False)
+    comparison.to_csv(comparison_path, index=False)
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return threshold_sweep, comparison, summary
+
+
 def summarize_adversarial_dataset_results(results: pd.DataFrame) -> dict[str, Any]:
     """Summarize adversarial-style external dataset results."""
 
@@ -968,6 +1107,19 @@ def _load_tabular_dataset(path: str | Path) -> pd.DataFrame:
     if dataset_path.suffix == ".csv":
         return pd.read_csv(dataset_path)
     raise ValueError("External dataset must be a .csv or .parquet file.")
+
+
+def _external_dataset_to_url_label_dataset(path: str | Path) -> pd.DataFrame:
+    external_dataset = _load_tabular_dataset(path)
+    required_columns = {"url", "status"}
+    missing_columns = required_columns.difference(external_dataset.columns)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        raise ValueError(f"External dataset is missing required columns: {missing}")
+    converted = external_dataset.loc[:, ["url", "status"]].copy()
+    converted["label"] = converted["status"].map(_normalize_external_label)
+    converted = converted.dropna(subset=["url", "label"])
+    return clean_url_dataset(converted.loc[:, ["url", "label"]])
 
 
 def _normalize_external_label(value: Any) -> int | None:
@@ -1046,8 +1198,10 @@ def _feature_group_for_feature(feature: str) -> str:
 def _json_ready(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _json_ready(item) for key, item in value.items()}
+    if isinstance(value, float) and pd.isna(value):
+        return None
     if hasattr(value, "item"):
-        return value.item()
+        return _json_ready(value.item())
     return value
 
 
@@ -1190,6 +1344,41 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         help="Maximum number of external validation rows to evaluate.",
     )
     parser.add_argument(
+        "--run-multisource-retraining",
+        action="store_true",
+        help="Train a tuned Random Forest on original plus external training data and sweep thresholds.",
+    )
+    parser.add_argument(
+        "--external-train",
+        default="data/external/pirocheto_phishing_url_train.parquet",
+        help="Path to the external training split used for multi-source retraining.",
+    )
+    parser.add_argument(
+        "--external-test",
+        default="data/external/pirocheto_phishing_url_test.parquet",
+        help="Path to the external test split used for multi-source evaluation.",
+    )
+    parser.add_argument(
+        "--multisource-model-output",
+        default=str(MULTISOURCE_MODEL_PATH),
+        help="Path where the multi-source Random Forest artifact should be written.",
+    )
+    parser.add_argument(
+        "--threshold-output",
+        default=str(THRESHOLD_SWEEP_RESULTS_PATH),
+        help="Path where threshold sweep results should be written.",
+    )
+    parser.add_argument(
+        "--multisource-comparison-output",
+        default=str(MULTISOURCE_MODEL_COMPARISON_PATH),
+        help="Path where multi-source model comparison results should be written.",
+    )
+    parser.add_argument(
+        "--multisource-summary-output",
+        default=str(MULTISOURCE_EXTERNAL_VALIDATION_SUMMARY_PATH),
+        help="Path where multi-source external validation summary JSON should be written.",
+    )
+    parser.add_argument(
         "--random-state",
         type=int,
         default=DEFAULT_RANDOM_STATE,
@@ -1275,6 +1464,22 @@ def main() -> None:
         print(f"Saved {len(external_results)} external validation rows to {args.external_validation_output}")
         print(f"Saved external validation summary to {args.external_validation_summary_output}")
         print(f"Random Forest external validation F1: {external_summary['random_forest'].get('f1', 0.0):.4f}")
+    if args.run_multisource_retraining:
+        threshold_sweep, comparison, summary = save_multisource_retraining_results(
+            original_dataset_path=args.dataset,
+            external_train_path=args.external_train,
+            external_test_path=args.external_test,
+            model_output_path=args.multisource_model_output,
+            threshold_output_path=args.threshold_output,
+            comparison_output_path=args.multisource_comparison_output,
+            summary_output_path=args.multisource_summary_output,
+            random_state=args.random_state,
+        )
+        print(f"Saved multi-source model to {args.multisource_model_output}")
+        print(f"Saved {len(threshold_sweep)} threshold rows to {args.threshold_output}")
+        print(f"Saved {len(comparison)} multi-source comparison rows to {args.multisource_comparison_output}")
+        print(f"Saved multi-source summary to {args.multisource_summary_output}")
+        print(f"Best multi-source threshold F1: {summary['best_f1_threshold']['f1']:.4f}")
 
 
 if __name__ == "__main__":
