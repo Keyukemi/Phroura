@@ -6,12 +6,16 @@ import pandas as pd
 
 from src.evaluation import (
     build_cross_validation_results,
+    build_feature_ablation_results,
+    build_feature_importance_table,
     build_model_comparison_rows,
     build_error_analysis_rows,
     build_random_forest_tuning_results,
     extract_random_forest_feature_importance,
     make_url_feature_split,
     save_cross_validation_results,
+    save_feature_ablation_results,
+    save_feature_importance_table,
     save_model_comparison,
     save_error_summary,
     save_random_forest_tuning_results,
@@ -183,6 +187,46 @@ class EvaluationTests(unittest.TestCase):
             self.assertTrue(output_path.exists())
             self.assertGreater(len(rows), 0)
 
+    def test_build_feature_importance_table_adds_report_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            importance_path = Path(temp_dir) / "importance.json"
+            importance_path.write_text(
+                """
+[
+  {"feature": "uses_https", "importance": 0.5},
+  {"feature": "entropy", "importance": 0.25}
+]
+""".strip(),
+                encoding="utf-8",
+            )
+
+            table = build_feature_importance_table(importance_path)
+
+            self.assertEqual(list(table["rank"]), [1, 2])
+            self.assertIn("feature_group", table.columns)
+            self.assertIn("interpretation", table.columns)
+            self.assertIn("caution", table.columns)
+            self.assertEqual(table.loc[0, "feature_group"], "binary_indicators")
+
+    def test_save_feature_importance_table_writes_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            importance_path = Path(temp_dir) / "importance.json"
+            output_path = Path(temp_dir) / "feature_table.csv"
+            importance_path.write_text(
+                """
+[
+  {"feature": "uses_https", "importance": 0.5},
+  {"feature": "entropy", "importance": 0.25}
+]
+""".strip(),
+                encoding="utf-8",
+            )
+
+            table = save_feature_importance_table(importance_path=importance_path, output_path=output_path)
+
+            self.assertTrue(output_path.exists())
+            self.assertEqual(list(pd.read_csv(output_path).columns), list(table.columns))
+
     def test_build_model_comparison_rows_sorts_by_f1(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             weak_path = Path(temp_dir) / "weak.json"
@@ -316,6 +360,37 @@ class EvaluationTests(unittest.TestCase):
             self.assertTrue(best_params_path.exists())
             self.assertEqual(list(pd.read_csv(results_path).columns), list(results.columns))
             self.assertEqual(best_params["n_iter"], 2)
+
+    def test_build_feature_ablation_results_returns_baseline_and_group_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_path = Path(temp_dir) / "dataset.csv"
+            _sample_dataset().to_csv(dataset_path, index=False)
+
+            results = build_feature_ablation_results(dataset_path=dataset_path, folds=3, random_state=5)
+
+            self.assertEqual(len(results), 7)
+            self.assertIn("all_features", set(results["experiment"]))
+            self.assertIn("without_length_features", set(results["experiment"]))
+            self.assertIn("without_complexity_features", set(results["experiment"]))
+            self.assertIn("f1_delta_from_all_features", results.columns)
+            self.assertIn("recall_delta_from_all_features", results.columns)
+            self.assertIn("roc_auc_delta_from_all_features", results.columns)
+
+    def test_save_feature_ablation_results_writes_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_path = Path(temp_dir) / "dataset.csv"
+            output_path = Path(temp_dir) / "ablation.csv"
+            _sample_dataset().to_csv(dataset_path, index=False)
+
+            results = save_feature_ablation_results(
+                dataset_path=dataset_path,
+                output_path=output_path,
+                folds=3,
+                random_state=5,
+            )
+
+            self.assertTrue(output_path.exists())
+            self.assertEqual(list(pd.read_csv(output_path).columns), list(results.columns))
 
 
 if __name__ == "__main__":

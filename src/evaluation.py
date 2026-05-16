@@ -37,6 +37,8 @@ MODEL_COMPARISON_PATH = Path("models/model_comparison.csv")
 CROSS_VALIDATION_RESULTS_PATH = Path("models/cross_validation_results.csv")
 RANDOM_FOREST_TUNING_RESULTS_PATH = Path("models/random_forest_tuning_results.csv")
 RANDOM_FOREST_BEST_PARAMS_PATH = Path("models/random_forest_best_params.json")
+ABLATION_RESULTS_PATH = Path("models/ablation_results.csv")
+FEATURE_IMPORTANCE_TABLE_PATH = Path("models/feature_importance_table.csv")
 CV_SCORING = {
     "precision": "precision",
     "recall": "recall",
@@ -84,6 +86,162 @@ ERROR_SUMMARY_NUMERIC_COLUMNS = [
     "entropy",
     "suspicious_keyword_count",
 ]
+FEATURE_GROUPS = {
+    "length_features": [
+        "url_length",
+        "hostname_length",
+        "path_length",
+        "query_length",
+    ],
+    "character_composition": [
+        "digit_count",
+        "letter_count",
+        "special_char_count",
+        "dot_count",
+        "hyphen_count",
+        "underscore_count",
+        "slash_count",
+        "question_mark_count",
+        "equals_count",
+        "ampersand_count",
+        "at_symbol_count",
+        "digit_ratio",
+        "special_char_ratio",
+        "hostname_digit_ratio",
+    ],
+    "structural_features": [
+        "path_depth",
+        "query_parameter_count",
+        "subdomain_count",
+    ],
+    "binary_indicators": [
+        "uses_https",
+        "has_ip_host",
+        "has_port",
+        "has_query",
+        "has_fragment",
+    ],
+    "keyword_features": [
+        "suspicious_keyword_count",
+    ],
+    "complexity_features": [
+        "entropy",
+    ],
+}
+FEATURE_INTERPRETATIONS = {
+    "uses_https": (
+        "Indicates whether the URL uses HTTPS.",
+        "Dataset-dependent signal; HTTPS should not be interpreted as proof of safety or danger.",
+    ),
+    "entropy": (
+        "Measures character randomness and possible obfuscation.",
+        "High entropy can also appear in legitimate generated URLs.",
+    ),
+    "digit_ratio": (
+        "Measures how much of the URL is numeric.",
+        "Numeric-heavy URLs can be suspicious but are not always malicious.",
+    ),
+    "digit_count": (
+        "Counts numeric characters in the URL.",
+        "Useful for generated-looking URLs, but some benign URLs contain IDs.",
+    ),
+    "url_length": (
+        "Measures total URL length.",
+        "Long URLs may indicate tracking or obfuscation but are not inherently phishing.",
+    ),
+    "path_length": (
+        "Measures length of the URL path.",
+        "Long paths can appear in both phishing and legitimate web applications.",
+    ),
+    "special_char_ratio": (
+        "Measures the proportion of non-alphanumeric characters.",
+        "Special characters can indicate obfuscation but also normal query/path syntax.",
+    ),
+    "letter_count": (
+        "Counts alphabetic characters in the URL.",
+        "Acts as a general lexical composition signal.",
+    ),
+    "hyphen_count": (
+        "Counts hyphens in the URL.",
+        "Hyphens can be used in deceptive domains but are common in benign domains too.",
+    ),
+    "hostname_length": (
+        "Measures domain and subdomain length.",
+        "Long hostnames can indicate suspicious subdomain structures.",
+    ),
+    "dot_count": (
+        "Counts dot characters in the URL.",
+        "Many dots may indicate deep subdomain nesting.",
+    ),
+    "path_depth": (
+        "Counts path segments.",
+        "Deep paths may reflect complex routing or phishing landing pages.",
+    ),
+    "subdomain_count": (
+        "Counts subdomain levels before the registered domain.",
+        "Useful for detecting deceptive nested subdomains.",
+    ),
+    "slash_count": (
+        "Counts slash characters.",
+        "Correlates with URL structure and path depth.",
+    ),
+    "special_char_count": (
+        "Counts non-alphanumeric characters.",
+        "Captures punctuation-heavy or encoded-looking URLs.",
+    ),
+    "hostname_digit_ratio": (
+        "Measures numeric density in the hostname.",
+        "May indicate generated domains, but some benign services use digits.",
+    ),
+    "suspicious_keyword_count": (
+        "Counts security or account-related words.",
+        "Useful supporting signal, but easy for attackers to avoid.",
+    ),
+    "query_length": (
+        "Measures query string length.",
+        "Long queries may reflect tracking, forms, or obfuscation.",
+    ),
+    "equals_count": (
+        "Counts equals signs in query parameters.",
+        "Mostly reflects query string structure.",
+    ),
+    "at_symbol_count": (
+        "Counts at symbols.",
+        "Can indicate URL obfuscation, though rare in this dataset.",
+    ),
+    "query_parameter_count": (
+        "Counts query parameters.",
+        "Captures URL parameter complexity.",
+    ),
+    "has_query": (
+        "Indicates whether a query string is present.",
+        "Low-level structure signal.",
+    ),
+    "underscore_count": (
+        "Counts underscores.",
+        "Minor lexical composition signal.",
+    ),
+    "ampersand_count": (
+        "Counts ampersands in query strings.",
+        "Mostly reflects multiple query parameters.",
+    ),
+    "question_mark_count": (
+        "Counts question marks.",
+        "Mostly indicates query string presence.",
+    ),
+    "has_fragment": (
+        "Indicates whether a URL fragment is present.",
+        "Low-importance structure signal in this dataset.",
+    ),
+    "has_ip_host": (
+        "Indicates whether the hostname is an IP address.",
+        "Important cybersecurity signal, but rare in this dataset.",
+    ),
+    "has_port": (
+        "Indicates whether a custom port is present.",
+        "Potentially suspicious but rare in this dataset.",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -252,6 +410,45 @@ def save_random_forest_feature_importance(
     importance_path.parent.mkdir(parents=True, exist_ok=True)
     importance_path.write_text(json.dumps(importance_rows, indent=2), encoding="utf-8")
     return importance_rows
+
+
+def build_feature_importance_table(
+    importance_path: str | Path = RANDOM_FOREST_FEATURE_IMPORTANCE_PATH,
+) -> pd.DataFrame:
+    """Build a report-ready Random Forest feature importance table."""
+
+    importance_rows = json.loads(Path(importance_path).read_text(encoding="utf-8"))
+    rows = []
+    for rank, row in enumerate(importance_rows, start=1):
+        feature = row["feature"]
+        interpretation, caution = FEATURE_INTERPRETATIONS.get(
+            feature,
+            ("Lexical URL signal used by the model.", "Interpret alongside ablation and error analysis."),
+        )
+        rows.append(
+            {
+                "rank": rank,
+                "feature": feature,
+                "importance": float(row["importance"]),
+                "feature_group": _feature_group_for_feature(feature),
+                "interpretation": interpretation,
+                "caution": caution,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def save_feature_importance_table(
+    importance_path: str | Path = RANDOM_FOREST_FEATURE_IMPORTANCE_PATH,
+    output_path: str | Path = FEATURE_IMPORTANCE_TABLE_PATH,
+) -> pd.DataFrame:
+    """Save a report-ready feature importance table as CSV."""
+
+    table = build_feature_importance_table(importance_path)
+    table_path = Path(output_path)
+    table_path.parent.mkdir(parents=True, exist_ok=True)
+    table.to_csv(table_path, index=False)
+    return table
 
 
 def build_model_comparison_rows(
@@ -442,12 +639,116 @@ def save_random_forest_tuning_results(
     return tuning_results, best_params
 
 
+def build_feature_ablation_results(
+    dataset_path: str | Path = DATASET_PATH,
+    folds: int = 5,
+    random_state: int = DEFAULT_RANDOM_STATE,
+) -> pd.DataFrame:
+    """Evaluate Random Forest after removing each lexical feature group."""
+
+    dataset = load_url_dataset(dataset_path)
+    features, labels = build_feature_matrix(dataset)
+    baseline_scores = _cross_validate_random_forest_features(
+        features=features,
+        labels=labels,
+        folds=folds,
+        random_state=random_state,
+    )
+    rows = [
+        {
+            "experiment": "all_features",
+            "removed_group": "",
+            "removed_feature_count": 0,
+            "remaining_feature_count": int(len(features.columns)),
+            "removed_features": "",
+            **baseline_scores,
+        }
+    ]
+
+    for group_name, removed_features in FEATURE_GROUPS.items():
+        remaining_features = features.drop(columns=removed_features)
+        scores = _cross_validate_random_forest_features(
+            features=remaining_features,
+            labels=labels,
+            folds=folds,
+            random_state=random_state,
+        )
+        rows.append(
+            {
+                "experiment": f"without_{group_name}",
+                "removed_group": group_name,
+                "removed_feature_count": len(removed_features),
+                "remaining_feature_count": int(len(remaining_features.columns)),
+                "removed_features": ", ".join(removed_features),
+                **scores,
+            }
+        )
+
+    results = pd.DataFrame(rows)
+    results["f1_delta_from_all_features"] = results["f1_mean"] - baseline_scores["f1_mean"]
+    results["recall_delta_from_all_features"] = results["recall_mean"] - baseline_scores["recall_mean"]
+    results["roc_auc_delta_from_all_features"] = results["roc_auc_mean"] - baseline_scores["roc_auc_mean"]
+    return results.sort_values("f1_mean", ascending=False).reset_index(drop=True)
+
+
+def save_feature_ablation_results(
+    dataset_path: str | Path = DATASET_PATH,
+    output_path: str | Path = ABLATION_RESULTS_PATH,
+    folds: int = 5,
+    random_state: int = DEFAULT_RANDOM_STATE,
+) -> pd.DataFrame:
+    """Save Random Forest feature ablation results as a report-ready CSV."""
+
+    results = build_feature_ablation_results(
+        dataset_path=dataset_path,
+        folds=folds,
+        random_state=random_state,
+    )
+    results_path = Path(output_path)
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    results.to_csv(results_path, index=False)
+    return results
+
+
 def _error_type(actual_label: int, predicted_label: int) -> str:
     if actual_label == 0 and predicted_label == 1:
         return "false_positive"
     if actual_label == 1 and predicted_label == 0:
         return "false_negative"
     return ""
+
+
+def _cross_validate_random_forest_features(
+    features: pd.DataFrame,
+    labels: pd.Series,
+    folds: int,
+    random_state: int,
+) -> dict[str, float | int]:
+    cross_validator = StratifiedKFold(n_splits=folds, shuffle=True, random_state=random_state)
+    scores = cross_validate(
+        build_random_forest_model(random_state=random_state),
+        features,
+        labels,
+        cv=cross_validator,
+        scoring=CV_SCORING,
+        error_score="raise",
+    )
+    row: dict[str, float | int] = {
+        "folds": folds,
+        "rows": int(len(labels)),
+    }
+    for metric_name in CV_SCORING:
+        metric_scores = scores[f"test_{metric_name}"]
+        row[f"{metric_name}_mean"] = float(metric_scores.mean())
+        row[f"{metric_name}_std"] = float(metric_scores.std())
+    return row
+
+
+def _feature_group_for_feature(feature: str) -> str:
+    for group_name, features in FEATURE_GROUPS.items():
+        if feature in features:
+            return group_name
+    return "unassigned"
 
 
 def _json_ready(value: Any) -> Any:
@@ -535,6 +836,21 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         help="Number of parallel jobs for Random Forest hyperparameter tuning.",
     )
     parser.add_argument(
+        "--ablation-output",
+        default=str(ABLATION_RESULTS_PATH),
+        help="Path where feature ablation results should be written.",
+    )
+    parser.add_argument(
+        "--run-ablation",
+        action="store_true",
+        help="Run Random Forest feature ablation study and save the results.",
+    )
+    parser.add_argument(
+        "--feature-importance-table-output",
+        default=str(FEATURE_IMPORTANCE_TABLE_PATH),
+        help="Path where the report-ready feature importance CSV should be written.",
+    )
+    parser.add_argument(
         "--random-state",
         type=int,
         default=DEFAULT_RANDOM_STATE,
@@ -570,6 +886,11 @@ def main() -> None:
     print(f"Saved {len(importance_rows)} Random Forest feature importances to {args.feature_importance_output}")
     print(f"Saved {len(comparison)} model comparison rows to {args.comparison_output}")
     print(f"Saved {len(cross_validation)} cross-validation rows to {args.cross_validation_output}")
+    feature_importance_table = save_feature_importance_table(
+        importance_path=args.feature_importance_output,
+        output_path=args.feature_importance_table_output,
+    )
+    print(f"Saved {len(feature_importance_table)} feature importance table rows to {args.feature_importance_table_output}")
     if args.tune_random_forest:
         tuning_results, best_params = save_random_forest_tuning_results(
             dataset_path=args.dataset,
@@ -584,6 +905,14 @@ def main() -> None:
         print(f"Saved {len(tuning_results)} Random Forest tuning rows to {args.tuning_output}")
         print(f"Saved best Random Forest parameters to {args.best_params_output}")
         print(f"Best Random Forest {args.tuning_scoring}: {best_params['best_score']:.4f}")
+    if args.run_ablation:
+        ablation_results = save_feature_ablation_results(
+            dataset_path=args.dataset,
+            output_path=args.ablation_output,
+            folds=args.folds,
+            random_state=args.random_state,
+        )
+        print(f"Saved {len(ablation_results)} feature ablation rows to {args.ablation_output}")
 
 
 if __name__ == "__main__":
