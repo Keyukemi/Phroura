@@ -12,6 +12,7 @@ env/
 
 # Local datasets
 data/Dataset.csv
+data/external/*.parquet
 
 # Jupyter
 .ipynb_checkpoints/

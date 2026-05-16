@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from src.evaluation import (
+    build_adversarial_dataset_results,
     build_cross_validation_results,
     build_feature_ablation_results,
     build_feature_importance_table,
@@ -14,6 +15,7 @@ from src.evaluation import (
     extract_random_forest_feature_importance,
     make_url_feature_split,
     save_cross_validation_results,
+    save_adversarial_dataset_results,
     save_feature_ablation_results,
     save_feature_importance_table,
     save_model_comparison,
@@ -24,6 +26,9 @@ from src.evaluation import (
     save_random_forest_error_summary,
     summarize_error_analysis,
 )
+from src.inference import build_model_artifact, save_model_artifact
+from src.model_training import train_random_forest
+from src.training import make_train_test_split
 
 
 def _sample_dataset() -> pd.DataFrame:
@@ -391,6 +396,69 @@ class EvaluationTests(unittest.TestCase):
 
             self.assertTrue(output_path.exists())
             self.assertEqual(list(pd.read_csv(output_path).columns), list(results.columns))
+
+    def test_build_adversarial_dataset_results_filters_and_scores_external_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_path = Path(temp_dir) / "model.joblib"
+            external_path = Path(temp_dir) / "external.csv"
+            split = make_train_test_split(_sample_dataset(), test_size=0.33, random_state=5)
+            model = train_random_forest(split, random_state=5)
+            save_model_artifact(build_model_artifact(model), model_path)
+            pd.DataFrame(
+                {
+                    "url": [
+                        "http://short.ly/verify-login",
+                        "https://www.rmit.edu.au/",
+                        "http://192.168.0.10/account",
+                    ],
+                    "status": ["phishing", "legitimate", "phishing"],
+                    "shortening_service": [1, 0, 0],
+                    "ip": [0, 0, 1],
+                    "nb_at": [0, 0, 0],
+                }
+            ).to_csv(external_path, index=False)
+
+            results, summary = build_adversarial_dataset_results(
+                external_dataset_path=external_path,
+                model_path=model_path,
+            )
+
+            self.assertEqual(len(results), 2)
+            self.assertEqual(summary["phishing_rows"], 2)
+            self.assertEqual(summary["benign_rows"], 0)
+            self.assertIn("url_shortening", summary["attack_type_counts"])
+            self.assertIn("ip_host", summary["attack_type_counts"])
+            self.assertIn("random_forest_prediction", results.columns)
+            self.assertIn("heuristic_prediction", results.columns)
+
+    def test_save_adversarial_dataset_results_writes_csv_and_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_path = Path(temp_dir) / "model.joblib"
+            external_path = Path(temp_dir) / "external.csv"
+            results_path = Path(temp_dir) / "adversarial.csv"
+            summary_path = Path(temp_dir) / "adversarial.json"
+            split = make_train_test_split(_sample_dataset(), test_size=0.33, random_state=5)
+            model = train_random_forest(split, random_state=5)
+            save_model_artifact(build_model_artifact(model), model_path)
+            pd.DataFrame(
+                {
+                    "url": ["http://example.com@192.168.0.10/login"],
+                    "status": ["phishing"],
+                    "nb_at": [1],
+                }
+            ).to_csv(external_path, index=False)
+
+            results, summary = save_adversarial_dataset_results(
+                external_dataset_path=external_path,
+                results_output_path=results_path,
+                summary_output_path=summary_path,
+                model_path=model_path,
+            )
+
+            self.assertTrue(results_path.exists())
+            self.assertTrue(summary_path.exists())
+            self.assertEqual(list(pd.read_csv(results_path).columns), list(results.columns))
+            self.assertEqual(summary["rows"], 1)
 
 
 if __name__ == "__main__":

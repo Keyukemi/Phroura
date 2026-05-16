@@ -1,0 +1,40 @@
+{
+  "rows": 967,
+  "phishing_rows": 967,
+  "benign_rows": 0,
+  "random_forest": {
+    "accuracy": 0.5470527404343329,
+    "precision": 1.0,
+    "recall": 0.5470527404343329,
+    "f1": 0.7072192513368984
+  },
+  "heuristic_baseline": {
+    "accuracy": 0.6204756980351603,
+    "precision": 1.0,
+    "recall": 0.6204756980351603,
+    "f1": 0.7657945118059988
+  },
+  "attack_type_counts": {
+    "abnormal_subdomain": 79,
+    "at_symbol_obfuscation": 89,
+    "brand_in_path": 13,
+    "brand_in_subdomain": 14,
+    "ip_host": 527,
+    "punycode_or_homograph_style": 1,
+    "random_domain": 169,
+    "url_shortening": 300
+  },
+  "source_path": "data/external/pirocheto_phishing_url_test.parquet",
+  "include_benign": false,
+  "max_rows": null,
+  "indicator_columns": [
+    "punycode",
+    "shortening_service",
+    "nb_at",
+    "ip",
+    "abnormal_subdomain",
+    "brand_in_subdomain",
+    "brand_in_path",
+    "random_domain"
+  ]
+}

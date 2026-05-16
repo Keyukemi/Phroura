@@ -9,9 +9,12 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold, cross_validate, train_test_split
 
+from src.baseline import HEURISTIC_THRESHOLD, score_features
 from src.features import FEATURE_NAMES, extract_feature_rows
+from src.inference import DEFAULT_MODEL_PATH, DEFAULT_PHISHING_THRESHOLD, load_model_artifact
 from src.model_training import (
     MODEL_METRICS_PATHS,
     build_logistic_regression_model,
@@ -39,6 +42,8 @@ RANDOM_FOREST_TUNING_RESULTS_PATH = Path("models/random_forest_tuning_results.cs
 RANDOM_FOREST_BEST_PARAMS_PATH = Path("models/random_forest_best_params.json")
 ABLATION_RESULTS_PATH = Path("models/ablation_results.csv")
 FEATURE_IMPORTANCE_TABLE_PATH = Path("models/feature_importance_table.csv")
+ADVERSARIAL_TEST_RESULTS_PATH = Path("models/adversarial_test_results.csv")
+ADVERSARIAL_TEST_SUMMARY_PATH = Path("models/adversarial_test_summary.json")
 CV_SCORING = {
     "precision": "precision",
     "recall": "recall",
@@ -242,6 +247,18 @@ FEATURE_INTERPRETATIONS = {
         "Potentially suspicious but rare in this dataset.",
     ),
 }
+ADVERSARIAL_INDICATORS = {
+    "punycode": "punycode_or_homograph_style",
+    "shortening_service": "url_shortening",
+    "nb_at": "at_symbol_obfuscation",
+    "ip": "ip_host",
+    "abnormal_subdomain": "abnormal_subdomain",
+    "brand_in_subdomain": "brand_in_subdomain",
+    "brand_in_path": "brand_in_path",
+    "random_domain": "random_domain",
+}
+PHISHING_LABEL_VALUES = {"phishing", "phish", "malicious", "bad", "1", 1, True}
+BENIGN_LABEL_VALUES = {"legitimate", "benign", "safe", "good", "0", 0, False}
 
 
 @dataclass(frozen=True)
@@ -710,12 +727,184 @@ def save_feature_ablation_results(
     return results
 
 
+def build_adversarial_dataset_results(
+    external_dataset_path: str | Path,
+    model_path: str | Path = DEFAULT_MODEL_PATH,
+    threshold: float = DEFAULT_PHISHING_THRESHOLD,
+    include_benign: bool = False,
+    max_rows: int | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Evaluate the deployed model on adversarial-style rows from an external URL dataset."""
+
+    external_dataset = _load_tabular_dataset(external_dataset_path)
+    required_columns = {"url", "status"}
+    missing_columns = required_columns.difference(external_dataset.columns)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        raise ValueError(f"External dataset is missing required columns: {missing}")
+
+    indicator_columns = [column for column in ADVERSARIAL_INDICATORS if column in external_dataset.columns]
+    if not indicator_columns:
+        expected = ", ".join(sorted(ADVERSARIAL_INDICATORS))
+        raise ValueError(f"External dataset must contain at least one adversarial indicator column: {expected}")
+
+    prepared = external_dataset.copy()
+    prepared["label"] = prepared["status"].map(_normalize_external_label)
+    prepared = prepared.dropna(subset=["url", "label"])
+    if not include_benign:
+        prepared = prepared[prepared["label"] == 1]
+    prepared["attack_types"] = prepared.apply(lambda row: _attack_types_for_external_row(row, indicator_columns), axis=1)
+    prepared = prepared[prepared["attack_types"] != ""].reset_index(drop=True)
+    if max_rows is not None:
+        prepared = prepared.head(max_rows).copy()
+
+    artifact = load_model_artifact(model_path)
+    model = artifact["model"]
+    feature_names = artifact["feature_names"]
+    rows = []
+    for _, source_row in prepared.iterrows():
+        features = extract_feature_rows([source_row["url"]])[0]
+        feature_frame = pd.DataFrame([[features[name] for name in feature_names]], columns=feature_names)
+        phishing_probability = float(model.predict_proba(feature_frame)[0][1])
+        random_forest_prediction = int(phishing_probability >= threshold)
+        heuristic_score, _ = score_features(features)
+        heuristic_prediction = int(heuristic_score >= HEURISTIC_THRESHOLD)
+        label = int(source_row["label"])
+        rows.append(
+            {
+                "url": source_row["url"],
+                "source_label": label,
+                "attack_types": source_row["attack_types"],
+                "random_forest_prediction": random_forest_prediction,
+                "random_forest_phishing_probability": phishing_probability,
+                "random_forest_correct": int(random_forest_prediction == label),
+                "heuristic_score": heuristic_score,
+                "heuristic_prediction": heuristic_prediction,
+                "heuristic_correct": int(heuristic_prediction == label),
+            }
+        )
+
+    results = pd.DataFrame(rows)
+    summary = summarize_adversarial_dataset_results(results)
+    summary["source_path"] = str(external_dataset_path)
+    summary["include_benign"] = include_benign
+    summary["max_rows"] = max_rows
+    summary["indicator_columns"] = indicator_columns
+    return results, summary
+
+
+def save_adversarial_dataset_results(
+    external_dataset_path: str | Path,
+    results_output_path: str | Path = ADVERSARIAL_TEST_RESULTS_PATH,
+    summary_output_path: str | Path = ADVERSARIAL_TEST_SUMMARY_PATH,
+    model_path: str | Path = DEFAULT_MODEL_PATH,
+    threshold: float = DEFAULT_PHISHING_THRESHOLD,
+    include_benign: bool = False,
+    max_rows: int | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Save external adversarial-style robustness results and summary."""
+
+    results, summary = build_adversarial_dataset_results(
+        external_dataset_path=external_dataset_path,
+        model_path=model_path,
+        threshold=threshold,
+        include_benign=include_benign,
+        max_rows=max_rows,
+    )
+    results_path = Path(results_output_path)
+    summary_path = Path(summary_output_path)
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    results.to_csv(results_path, index=False)
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return results, summary
+
+
+def summarize_adversarial_dataset_results(results: pd.DataFrame) -> dict[str, Any]:
+    """Summarize adversarial-style external dataset results."""
+
+    if results.empty:
+        return {
+            "rows": 0,
+            "random_forest": {},
+            "heuristic_baseline": {},
+            "attack_type_counts": {},
+        }
+
+    labels = results["source_label"]
+    rf_predictions = results["random_forest_prediction"]
+    heuristic_predictions = results["heuristic_prediction"]
+    attack_counts: dict[str, int] = {}
+    for attack_types in results["attack_types"]:
+        for attack_type in str(attack_types).split(";"):
+            attack_counts[attack_type] = attack_counts.get(attack_type, 0) + 1
+
+    summary = {
+        "rows": int(len(results)),
+        "phishing_rows": int((labels == 1).sum()),
+        "benign_rows": int((labels == 0).sum()),
+        "random_forest": _prediction_summary(labels, rf_predictions, results["random_forest_phishing_probability"]),
+        "heuristic_baseline": _prediction_summary(labels, heuristic_predictions, None),
+        "attack_type_counts": dict(sorted(attack_counts.items())),
+    }
+    return summary
+
+
 def _error_type(actual_label: int, predicted_label: int) -> str:
     if actual_label == 0 and predicted_label == 1:
         return "false_positive"
     if actual_label == 1 and predicted_label == 0:
         return "false_negative"
     return ""
+
+
+def _load_tabular_dataset(path: str | Path) -> pd.DataFrame:
+    dataset_path = Path(path)
+    if dataset_path.suffix == ".parquet":
+        return pd.read_parquet(dataset_path)
+    if dataset_path.suffix == ".csv":
+        return pd.read_csv(dataset_path)
+    raise ValueError("External dataset must be a .csv or .parquet file.")
+
+
+def _normalize_external_label(value: Any) -> int | None:
+    normalized = str(value).strip().lower() if not isinstance(value, bool) else value
+    if normalized in PHISHING_LABEL_VALUES:
+        return 1
+    if normalized in BENIGN_LABEL_VALUES:
+        return 0
+    return None
+
+
+def _attack_types_for_external_row(row: pd.Series, indicator_columns: list[str]) -> str:
+    attack_types = []
+    for column in indicator_columns:
+        if _indicator_is_active(row[column]):
+            attack_types.append(ADVERSARIAL_INDICATORS[column])
+    return ";".join(attack_types)
+
+
+def _indicator_is_active(value: Any) -> bool:
+    try:
+        return float(value) > 0
+    except (TypeError, ValueError):
+        return str(value).strip().lower() in {"true", "yes", "y"}
+
+
+def _prediction_summary(
+    labels: pd.Series,
+    predictions: pd.Series,
+    scores: pd.Series | None,
+) -> dict[str, float]:
+    summary = {
+        "accuracy": float(accuracy_score(labels, predictions)),
+        "precision": float(precision_score(labels, predictions, zero_division=0)),
+        "recall": float(recall_score(labels, predictions, zero_division=0)),
+        "f1": float(f1_score(labels, predictions, zero_division=0)),
+    }
+    if scores is not None and len(set(labels)) > 1:
+        summary["roc_auc"] = float(roc_auc_score(labels, scores))
+    return summary
 
 
 def _cross_validate_random_forest_features(
@@ -851,6 +1040,32 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         help="Path where the report-ready feature importance CSV should be written.",
     )
     parser.add_argument(
+        "--external-adversarial-dataset",
+        default=None,
+        help="Path to an external URL dataset used for adversarial-style robustness testing.",
+    )
+    parser.add_argument(
+        "--adversarial-output",
+        default=str(ADVERSARIAL_TEST_RESULTS_PATH),
+        help="Path where external adversarial-style detailed results should be written.",
+    )
+    parser.add_argument(
+        "--adversarial-summary-output",
+        default=str(ADVERSARIAL_TEST_SUMMARY_PATH),
+        help="Path where external adversarial-style summary JSON should be written.",
+    )
+    parser.add_argument(
+        "--include-benign-adversarial",
+        action="store_true",
+        help="Include benign external rows that contain adversarial-style indicators.",
+    )
+    parser.add_argument(
+        "--adversarial-max-rows",
+        type=int,
+        default=None,
+        help="Maximum number of external adversarial-style rows to evaluate.",
+    )
+    parser.add_argument(
         "--random-state",
         type=int,
         default=DEFAULT_RANDOM_STATE,
@@ -913,6 +1128,18 @@ def main() -> None:
             random_state=args.random_state,
         )
         print(f"Saved {len(ablation_results)} feature ablation rows to {args.ablation_output}")
+    if args.external_adversarial_dataset:
+        adversarial_results, adversarial_summary = save_adversarial_dataset_results(
+            external_dataset_path=args.external_adversarial_dataset,
+            results_output_path=args.adversarial_output,
+            summary_output_path=args.adversarial_summary_output,
+            threshold=DEFAULT_PHISHING_THRESHOLD,
+            include_benign=args.include_benign_adversarial,
+            max_rows=args.adversarial_max_rows,
+        )
+        print(f"Saved {len(adversarial_results)} adversarial-style rows to {args.adversarial_output}")
+        print(f"Saved adversarial-style summary to {args.adversarial_summary_output}")
+        print(f"Random Forest adversarial-style recall: {adversarial_summary['random_forest'].get('recall', 0.0):.4f}")
 
 
 if __name__ == "__main__":
