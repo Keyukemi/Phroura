@@ -19,6 +19,7 @@ Purpose:
 
 - external adversarial-style robustness testing
 - selection of phishing URLs with obfuscation or evasion indicators
+- balanced external validation using both phishing and legitimate URLs
 
 The external dataset's precomputed feature columns are not used for Phroura prediction. They are used only to select adversarial-style rows. Phroura re-runs its own lexical feature extractor on the raw URL strings before prediction.
 
@@ -35,3 +36,10 @@ Indicators used for adversarial-style filtering:
 
 The current Phase 3 robustness artifact uses the dataset's test split and keeps phishing rows with at least one of these indicators.
 
+The current Phase 3 external validation artifact uses the full test split:
+
+```text
+3772 total rows
+1886 phishing rows
+1886 legitimate rows
+```

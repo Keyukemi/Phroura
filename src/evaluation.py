@@ -44,6 +44,8 @@ ABLATION_RESULTS_PATH = Path("models/ablation_results.csv")
 FEATURE_IMPORTANCE_TABLE_PATH = Path("models/feature_importance_table.csv")
 ADVERSARIAL_TEST_RESULTS_PATH = Path("models/adversarial_test_results.csv")
 ADVERSARIAL_TEST_SUMMARY_PATH = Path("models/adversarial_test_summary.json")
+EXTERNAL_VALIDATION_RESULTS_PATH = Path("models/external_validation_results.csv")
+EXTERNAL_VALIDATION_SUMMARY_PATH = Path("models/external_validation_summary.json")
 CV_SCORING = {
     "precision": "precision",
     "recall": "recall",
@@ -820,6 +822,85 @@ def save_adversarial_dataset_results(
     return results, summary
 
 
+def build_external_validation_results(
+    external_dataset_path: str | Path,
+    model_path: str | Path = DEFAULT_MODEL_PATH,
+    threshold: float = DEFAULT_PHISHING_THRESHOLD,
+    max_rows: int | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Evaluate the deployed model on all labelled rows in an external URL dataset."""
+
+    external_dataset = _load_tabular_dataset(external_dataset_path)
+    required_columns = {"url", "status"}
+    missing_columns = required_columns.difference(external_dataset.columns)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        raise ValueError(f"External dataset is missing required columns: {missing}")
+
+    prepared = external_dataset.loc[:, ["url", "status"]].copy()
+    prepared["label"] = prepared["status"].map(_normalize_external_label)
+    prepared = prepared.dropna(subset=["url", "label"]).reset_index(drop=True)
+    if max_rows is not None:
+        prepared = prepared.head(max_rows).copy()
+
+    artifact = load_model_artifact(model_path)
+    model = artifact["model"]
+    feature_names = artifact["feature_names"]
+    rows = []
+    for _, source_row in prepared.iterrows():
+        features = extract_feature_rows([source_row["url"]])[0]
+        feature_frame = pd.DataFrame([[features[name] for name in feature_names]], columns=feature_names)
+        phishing_probability = float(model.predict_proba(feature_frame)[0][1])
+        random_forest_prediction = int(phishing_probability >= threshold)
+        heuristic_score, _ = score_features(features)
+        heuristic_prediction = int(heuristic_score >= HEURISTIC_THRESHOLD)
+        label = int(source_row["label"])
+        rows.append(
+            {
+                "url": source_row["url"],
+                "source_label": label,
+                "source_status": source_row["status"],
+                "random_forest_prediction": random_forest_prediction,
+                "random_forest_phishing_probability": phishing_probability,
+                "random_forest_correct": int(random_forest_prediction == label),
+                "heuristic_score": heuristic_score,
+                "heuristic_prediction": heuristic_prediction,
+                "heuristic_correct": int(heuristic_prediction == label),
+            }
+        )
+
+    results = pd.DataFrame(rows)
+    summary = summarize_external_validation_results(results)
+    summary["source_path"] = str(external_dataset_path)
+    summary["max_rows"] = max_rows
+    return results, summary
+
+
+def save_external_validation_results(
+    external_dataset_path: str | Path,
+    results_output_path: str | Path = EXTERNAL_VALIDATION_RESULTS_PATH,
+    summary_output_path: str | Path = EXTERNAL_VALIDATION_SUMMARY_PATH,
+    model_path: str | Path = DEFAULT_MODEL_PATH,
+    threshold: float = DEFAULT_PHISHING_THRESHOLD,
+    max_rows: int | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Save balanced external validation results and summary."""
+
+    results, summary = build_external_validation_results(
+        external_dataset_path=external_dataset_path,
+        model_path=model_path,
+        threshold=threshold,
+        max_rows=max_rows,
+    )
+    results_path = Path(results_output_path)
+    summary_path = Path(summary_output_path)
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    results.to_csv(results_path, index=False)
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return results, summary
+
+
 def summarize_adversarial_dataset_results(results: pd.DataFrame) -> dict[str, Any]:
     """Summarize adversarial-style external dataset results."""
 
@@ -848,6 +929,28 @@ def summarize_adversarial_dataset_results(results: pd.DataFrame) -> dict[str, An
         "attack_type_counts": dict(sorted(attack_counts.items())),
     }
     return summary
+
+
+def summarize_external_validation_results(results: pd.DataFrame) -> dict[str, Any]:
+    """Summarize balanced external validation results."""
+
+    if results.empty:
+        return {
+            "rows": 0,
+            "random_forest": {},
+            "heuristic_baseline": {},
+        }
+
+    labels = results["source_label"]
+    rf_predictions = results["random_forest_prediction"]
+    heuristic_predictions = results["heuristic_prediction"]
+    return {
+        "rows": int(len(results)),
+        "phishing_rows": int((labels == 1).sum()),
+        "benign_rows": int((labels == 0).sum()),
+        "random_forest": _prediction_summary(labels, rf_predictions, results["random_forest_phishing_probability"]),
+        "heuristic_baseline": _prediction_summary(labels, heuristic_predictions, None),
+    }
 
 
 def _error_type(actual_label: int, predicted_label: int) -> str:
@@ -1066,6 +1169,27 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         help="Maximum number of external adversarial-style rows to evaluate.",
     )
     parser.add_argument(
+        "--external-validation-dataset",
+        default=None,
+        help="Path to an external labelled URL dataset used for balanced validation.",
+    )
+    parser.add_argument(
+        "--external-validation-output",
+        default=str(EXTERNAL_VALIDATION_RESULTS_PATH),
+        help="Path where balanced external validation detailed results should be written.",
+    )
+    parser.add_argument(
+        "--external-validation-summary-output",
+        default=str(EXTERNAL_VALIDATION_SUMMARY_PATH),
+        help="Path where balanced external validation summary JSON should be written.",
+    )
+    parser.add_argument(
+        "--external-validation-max-rows",
+        type=int,
+        default=None,
+        help="Maximum number of external validation rows to evaluate.",
+    )
+    parser.add_argument(
         "--random-state",
         type=int,
         default=DEFAULT_RANDOM_STATE,
@@ -1140,6 +1264,17 @@ def main() -> None:
         print(f"Saved {len(adversarial_results)} adversarial-style rows to {args.adversarial_output}")
         print(f"Saved adversarial-style summary to {args.adversarial_summary_output}")
         print(f"Random Forest adversarial-style recall: {adversarial_summary['random_forest'].get('recall', 0.0):.4f}")
+    if args.external_validation_dataset:
+        external_results, external_summary = save_external_validation_results(
+            external_dataset_path=args.external_validation_dataset,
+            results_output_path=args.external_validation_output,
+            summary_output_path=args.external_validation_summary_output,
+            threshold=DEFAULT_PHISHING_THRESHOLD,
+            max_rows=args.external_validation_max_rows,
+        )
+        print(f"Saved {len(external_results)} external validation rows to {args.external_validation_output}")
+        print(f"Saved external validation summary to {args.external_validation_summary_output}")
+        print(f"Random Forest external validation F1: {external_summary['random_forest'].get('f1', 0.0):.4f}")
 
 
 if __name__ == "__main__":

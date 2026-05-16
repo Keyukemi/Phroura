@@ -7,6 +7,7 @@ import pandas as pd
 from src.evaluation import (
     build_adversarial_dataset_results,
     build_cross_validation_results,
+    build_external_validation_results,
     build_feature_ablation_results,
     build_feature_importance_table,
     build_model_comparison_rows,
@@ -16,6 +17,7 @@ from src.evaluation import (
     make_url_feature_split,
     save_cross_validation_results,
     save_adversarial_dataset_results,
+    save_external_validation_results,
     save_feature_ablation_results,
     save_feature_importance_table,
     save_model_comparison,
@@ -459,6 +461,66 @@ class EvaluationTests(unittest.TestCase):
             self.assertTrue(summary_path.exists())
             self.assertEqual(list(pd.read_csv(results_path).columns), list(results.columns))
             self.assertEqual(summary["rows"], 1)
+
+    def test_build_external_validation_results_scores_all_labelled_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_path = Path(temp_dir) / "model.joblib"
+            external_path = Path(temp_dir) / "external.csv"
+            split = make_train_test_split(_sample_dataset(), test_size=0.33, random_state=5)
+            model = train_random_forest(split, random_state=5)
+            save_model_artifact(build_model_artifact(model), model_path)
+            pd.DataFrame(
+                {
+                    "url": [
+                        "https://www.rmit.edu.au/",
+                        "http://192.168.0.10/account",
+                    ],
+                    "status": ["legitimate", "phishing"],
+                }
+            ).to_csv(external_path, index=False)
+
+            results, summary = build_external_validation_results(
+                external_dataset_path=external_path,
+                model_path=model_path,
+            )
+
+            self.assertEqual(len(results), 2)
+            self.assertEqual(summary["rows"], 2)
+            self.assertEqual(summary["phishing_rows"], 1)
+            self.assertEqual(summary["benign_rows"], 1)
+            self.assertIn("random_forest", summary)
+            self.assertIn("heuristic_baseline", summary)
+
+    def test_save_external_validation_results_writes_csv_and_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_path = Path(temp_dir) / "model.joblib"
+            external_path = Path(temp_dir) / "external.csv"
+            results_path = Path(temp_dir) / "external_results.csv"
+            summary_path = Path(temp_dir) / "external_summary.json"
+            split = make_train_test_split(_sample_dataset(), test_size=0.33, random_state=5)
+            model = train_random_forest(split, random_state=5)
+            save_model_artifact(build_model_artifact(model), model_path)
+            pd.DataFrame(
+                {
+                    "url": [
+                        "https://www.rmit.edu.au/",
+                        "http://192.168.0.10/account",
+                    ],
+                    "status": ["legitimate", "phishing"],
+                }
+            ).to_csv(external_path, index=False)
+
+            results, summary = save_external_validation_results(
+                external_dataset_path=external_path,
+                results_output_path=results_path,
+                summary_output_path=summary_path,
+                model_path=model_path,
+            )
+
+            self.assertTrue(results_path.exists())
+            self.assertTrue(summary_path.exists())
+            self.assertEqual(list(pd.read_csv(results_path).columns), list(results.columns))
+            self.assertEqual(summary["rows"], 2)
 
 
 if __name__ == "__main__":
