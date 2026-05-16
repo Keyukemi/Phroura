@@ -8,11 +8,13 @@ from src.evaluation import (
     build_cross_validation_results,
     build_model_comparison_rows,
     build_error_analysis_rows,
+    build_random_forest_tuning_results,
     extract_random_forest_feature_importance,
     make_url_feature_split,
     save_cross_validation_results,
     save_model_comparison,
     save_error_summary,
+    save_random_forest_tuning_results,
     save_random_forest_feature_importance,
     save_random_forest_error_analysis,
     save_random_forest_error_summary,
@@ -273,6 +275,47 @@ class EvaluationTests(unittest.TestCase):
 
             self.assertTrue(output_path.exists())
             self.assertEqual(list(pd.read_csv(output_path).columns), list(results.columns))
+
+    def test_build_random_forest_tuning_results_returns_search_rows_and_best_params(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_path = Path(temp_dir) / "dataset.csv"
+            _sample_dataset().to_csv(dataset_path, index=False)
+
+            results, best_params = build_random_forest_tuning_results(
+                dataset_path=dataset_path,
+                folds=3,
+                n_iter=2,
+                random_state=5,
+            )
+
+            self.assertEqual(len(results), 2)
+            self.assertIn("rank_test_score", results.columns)
+            self.assertIn("param_n_estimators", results.columns)
+            self.assertIn("best_params", best_params)
+            self.assertIn("best_score", best_params)
+            self.assertEqual(best_params["folds"], 3)
+            self.assertEqual(best_params["n_iter"], 2)
+
+    def test_save_random_forest_tuning_results_writes_csv_and_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_path = Path(temp_dir) / "dataset.csv"
+            results_path = Path(temp_dir) / "tuning.csv"
+            best_params_path = Path(temp_dir) / "best_params.json"
+            _sample_dataset().to_csv(dataset_path, index=False)
+
+            results, best_params = save_random_forest_tuning_results(
+                dataset_path=dataset_path,
+                results_output_path=results_path,
+                best_params_output_path=best_params_path,
+                folds=3,
+                n_iter=2,
+                random_state=5,
+            )
+
+            self.assertTrue(results_path.exists())
+            self.assertTrue(best_params_path.exists())
+            self.assertEqual(list(pd.read_csv(results_path).columns), list(results.columns))
+            self.assertEqual(best_params["n_iter"], 2)
 
 
 if __name__ == "__main__":

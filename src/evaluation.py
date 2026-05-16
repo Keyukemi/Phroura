@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
+from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold, cross_validate, train_test_split
 
 from src.features import FEATURE_NAMES, extract_feature_rows
 from src.model_training import (
@@ -35,6 +35,8 @@ RANDOM_FOREST_ERROR_SUMMARY_PATH = Path("models/random_forest_error_summary.json
 RANDOM_FOREST_FEATURE_IMPORTANCE_PATH = Path("models/random_forest_feature_importance.json")
 MODEL_COMPARISON_PATH = Path("models/model_comparison.csv")
 CROSS_VALIDATION_RESULTS_PATH = Path("models/cross_validation_results.csv")
+RANDOM_FOREST_TUNING_RESULTS_PATH = Path("models/random_forest_tuning_results.csv")
+RANDOM_FOREST_BEST_PARAMS_PATH = Path("models/random_forest_best_params.json")
 CV_SCORING = {
     "precision": "precision",
     "recall": "recall",
@@ -352,12 +354,108 @@ def save_cross_validation_results(
     return results
 
 
+def build_random_forest_tuning_results(
+    dataset_path: str | Path = DATASET_PATH,
+    folds: int = 3,
+    n_iter: int = 12,
+    random_state: int = DEFAULT_RANDOM_STATE,
+    scoring: str = "f1",
+    n_jobs: int = 1,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Tune Random Forest hyperparameters with randomized cross-validation search."""
+
+    dataset = load_url_dataset(dataset_path)
+    features, labels = build_feature_matrix(dataset)
+    cross_validator = StratifiedKFold(n_splits=folds, shuffle=True, random_state=random_state)
+    search = RandomizedSearchCV(
+        estimator=build_random_forest_model(random_state=random_state),
+        param_distributions={
+            "n_estimators": [100, 200, 300],
+            "max_depth": [8, 12, 16, None],
+            "min_samples_split": [2, 5, 10],
+            "min_samples_leaf": [1, 2, 4],
+            "class_weight": ["balanced", "balanced_subsample"],
+        },
+        n_iter=n_iter,
+        scoring=scoring,
+        cv=cross_validator,
+        n_jobs=n_jobs,
+        random_state=random_state,
+        return_train_score=True,
+        error_score="raise",
+    )
+    search.fit(features, labels)
+
+    results = pd.DataFrame(search.cv_results_)
+    selected_columns = [
+        "rank_test_score",
+        "mean_test_score",
+        "std_test_score",
+        "mean_train_score",
+        "std_train_score",
+        "mean_fit_time",
+        "param_n_estimators",
+        "param_max_depth",
+        "param_min_samples_split",
+        "param_min_samples_leaf",
+        "param_class_weight",
+    ]
+    tuning_results = results.loc[:, selected_columns].sort_values("rank_test_score").reset_index(drop=True)
+    best_params = {
+        "best_params": _json_ready(search.best_params_),
+        "best_score": float(search.best_score_),
+        "folds": folds,
+        "n_iter": n_iter,
+        "scoring": scoring,
+        "rows": int(len(labels)),
+        "n_jobs": n_jobs,
+    }
+    return tuning_results, best_params
+
+
+def save_random_forest_tuning_results(
+    dataset_path: str | Path = DATASET_PATH,
+    results_output_path: str | Path = RANDOM_FOREST_TUNING_RESULTS_PATH,
+    best_params_output_path: str | Path = RANDOM_FOREST_BEST_PARAMS_PATH,
+    folds: int = 3,
+    n_iter: int = 12,
+    random_state: int = DEFAULT_RANDOM_STATE,
+    scoring: str = "f1",
+    n_jobs: int = 1,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Save Random Forest tuning results and the best parameter set."""
+
+    tuning_results, best_params = build_random_forest_tuning_results(
+        dataset_path=dataset_path,
+        folds=folds,
+        n_iter=n_iter,
+        random_state=random_state,
+        scoring=scoring,
+        n_jobs=n_jobs,
+    )
+    results_path = Path(results_output_path)
+    params_path = Path(best_params_output_path)
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    params_path.parent.mkdir(parents=True, exist_ok=True)
+    tuning_results.to_csv(results_path, index=False)
+    params_path.write_text(json.dumps(best_params, indent=2), encoding="utf-8")
+    return tuning_results, best_params
+
+
 def _error_type(actual_label: int, predicted_label: int) -> str:
     if actual_label == 0 and predicted_label == 1:
         return "false_positive"
     if actual_label == 1 and predicted_label == 0:
         return "false_negative"
     return ""
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _json_ready(item) for key, item in value.items()}
+    if hasattr(value, "item"):
+        return value.item()
+    return value
 
 
 def _build_argument_parser() -> argparse.ArgumentParser:
@@ -399,6 +497,44 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         help="Number of folds for stratified cross-validation.",
     )
     parser.add_argument(
+        "--tune-random-forest",
+        action="store_true",
+        help="Run Random Forest hyperparameter tuning and save tuning artifacts.",
+    )
+    parser.add_argument(
+        "--tuning-output",
+        default=str(RANDOM_FOREST_TUNING_RESULTS_PATH),
+        help="Path where Random Forest tuning results should be written.",
+    )
+    parser.add_argument(
+        "--best-params-output",
+        default=str(RANDOM_FOREST_BEST_PARAMS_PATH),
+        help="Path where the best Random Forest parameters should be written.",
+    )
+    parser.add_argument(
+        "--tuning-folds",
+        type=int,
+        default=3,
+        help="Number of folds for Random Forest hyperparameter tuning.",
+    )
+    parser.add_argument(
+        "--tuning-iterations",
+        type=int,
+        default=12,
+        help="Number of sampled parameter combinations for Random Forest tuning.",
+    )
+    parser.add_argument(
+        "--tuning-scoring",
+        default="f1",
+        help="Scoring metric used for Random Forest hyperparameter tuning.",
+    )
+    parser.add_argument(
+        "--tuning-jobs",
+        type=int,
+        default=1,
+        help="Number of parallel jobs for Random Forest hyperparameter tuning.",
+    )
+    parser.add_argument(
         "--random-state",
         type=int,
         default=DEFAULT_RANDOM_STATE,
@@ -434,6 +570,20 @@ def main() -> None:
     print(f"Saved {len(importance_rows)} Random Forest feature importances to {args.feature_importance_output}")
     print(f"Saved {len(comparison)} model comparison rows to {args.comparison_output}")
     print(f"Saved {len(cross_validation)} cross-validation rows to {args.cross_validation_output}")
+    if args.tune_random_forest:
+        tuning_results, best_params = save_random_forest_tuning_results(
+            dataset_path=args.dataset,
+            results_output_path=args.tuning_output,
+            best_params_output_path=args.best_params_output,
+            folds=args.tuning_folds,
+            n_iter=args.tuning_iterations,
+            random_state=args.random_state,
+            scoring=args.tuning_scoring,
+            n_jobs=args.tuning_jobs,
+        )
+        print(f"Saved {len(tuning_results)} Random Forest tuning rows to {args.tuning_output}")
+        print(f"Saved best Random Forest parameters to {args.best_params_output}")
+        print(f"Best Random Forest {args.tuning_scoring}: {best_params['best_score']:.4f}")
 
 
 if __name__ == "__main__":
