@@ -456,6 +456,10 @@ def _inject_styles() -> None:
 
         [data-testid="stMetricValue"] {
             color: var(--phroura-navy);
+            font-size: 1.35rem;
+            line-height: 1.2;
+            overflow-wrap: anywhere;
+            white-space: normal;
         }
 
         .metric-card {
