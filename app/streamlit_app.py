@@ -12,7 +12,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from src.inference import DEFAULT_MODEL_PATH, DEFAULT_PHISHING_THRESHOLD, load_model_artifact, predict_url
+from src.inference import load_model_artifact, predict_url
 
 
 PAGE_CHECK_URL = "Check URL"
@@ -25,6 +25,9 @@ NAVIGATION_PAGES = (
     PAGE_LEXICAL_FEATURES,
     PAGE_MODEL_LIMITS,
 )
+APP_MODEL_PATH = Path("models/multisource_random_forest_model.joblib")
+APP_PHISHING_THRESHOLD = 0.40
+APP_MODEL_NAME = "Multi-source Random Forest"
 
 EXAMPLE_URLS = {
     "University homepage": "https://www.rmit.edu.au/",
@@ -171,9 +174,9 @@ def _render_model_limits_page() -> None:
     st.subheader("Model & Limits")
     st.markdown(
         """
-        The deployment model is a Random Forest classifier selected after comparing the heuristic baseline,
-        Logistic Regression, Random Forest, and SVM on the same train/test split. Random Forest was selected
-        because it had the strongest overall F1-score and ROC-AUC in the project evaluation artifacts.
+        The deployment model is a multi-source Random Forest classifier trained using the original URL-Phish
+        dataset plus an additional external training source. This model is used in the app because Phase 3
+        external validation showed stronger generalization than the original URL-Phish-only model.
         """
     )
 
@@ -183,8 +186,8 @@ def _render_model_limits_page() -> None:
             """
             <div class="info-panel">
                 <strong>What the probability means</strong>
-                <span>The model returns an estimated phishing probability. At the default 0.50 threshold,
-                probabilities of 50% or higher are classified as phishing.</span>
+                <span>The model returns an estimated phishing probability. At the 0.40 threshold,
+                probabilities of 40% or higher are classified as phishing.</span>
             </div>
             """,
             unsafe_allow_html=True,
@@ -217,11 +220,11 @@ def _render_model_limits_page() -> None:
 @st.cache_resource(show_spinner=False)
 def _load_artifact() -> dict | None:
     try:
-        return load_model_artifact(DEFAULT_MODEL_PATH)
+        return load_model_artifact(APP_MODEL_PATH)
     except FileNotFoundError:
         st.error(
             "The trained model artifact is missing. Run "
-            "`python3 -m src.inference --save-model` before launching the app."
+            "`python3 -m src.evaluation --run-multisource-retraining` before launching the app."
         )
     except ValueError as error:
         st.error(f"The trained model artifact could not be loaded: {error}")
@@ -241,14 +244,14 @@ def _render_input_panel() -> str:
 
 def _render_model_panel() -> None:
     st.subheader("Model")
-    st.metric("Classifier", "Random Forest")
-    st.metric("Decision threshold", f"{DEFAULT_PHISHING_THRESHOLD:.2f}")
+    st.metric("Classifier", APP_MODEL_NAME)
+    st.metric("Decision threshold", f"{APP_PHISHING_THRESHOLD:.2f}")
     st.metric("Feature set", "28 lexical signals")
 
 
 def _render_prediction(url: str, artifact: dict) -> None:
     try:
-        result = predict_url(url, artifact=artifact)
+        result = predict_url(url, artifact=artifact, threshold=APP_PHISHING_THRESHOLD)
     except ValueError as error:
         st.error(str(error))
         return

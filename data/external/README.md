@@ -53,3 +53,51 @@ pirocheto/phishing-url train split
 ```
 
 It is evaluated on the held-out `pirocheto/phishing-url` test split.
+
+## LegitPhish Dataset
+
+Source:
+
+```text
+https://data.mendeley.com/datasets/hx4m73v2sf/2
+```
+
+Local files:
+
+```text
+data/legitPhish.csv
+data/external/legitphish_normalized.csv
+```
+
+Purpose:
+
+- final independent external validation
+- third-source generalization check after multi-source retraining
+- comparison between the original Random Forest, the multi-source Random Forest, and the heuristic baseline
+
+The original LegitPhish file contains precomputed URL feature columns. Phroura does not use those feature columns for prediction. Phroura uses only the raw `URL` strings and re-runs its own lexical feature extractor before scoring.
+
+Important label mapping:
+
+```text
+LegitPhish ClassLabel 0 = phishing
+LegitPhish ClassLabel 1 = legitimate
+Phroura label 1 = phishing
+Phroura label 0 = legitimate
+```
+
+The normalized file therefore converts:
+
+```text
+ClassLabel 0 -> label 1
+ClassLabel 1 -> label 0
+```
+
+The current Phase 3 LegitPhish validation artifact uses:
+
+```text
+101218 usable rows
+63678 phishing rows
+37540 legitimate rows
+1 row dropped because its label was missing
+```

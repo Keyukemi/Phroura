@@ -1,0 +1,41 @@
+{
+  "source_path": "data/legitPhish.csv",
+  "normalized_path": "data/external/legitphish_normalized.csv",
+  "rows": 101218,
+  "dropped_rows": 1,
+  "phishing_rows": 63678,
+  "benign_rows": 37540,
+  "label_mapping": {
+    "legitphish_ClassLabel_0": "phishing -> Phroura label 1",
+    "legitphish_ClassLabel_1": "legitimate -> Phroura label 0"
+  },
+  "models": {
+    "original_random_forest_threshold_0_50": {
+      "accuracy": 0.7655061352723824,
+      "precision": 0.9724633909772658,
+      "recall": 0.6455447721348032,
+      "f1": 0.7759771210676835,
+      "roc_auc": 0.9029609799423222
+    },
+    "multisource_random_forest_threshold_0_50": {
+      "accuracy": 0.909156474144915,
+      "precision": 0.9764582422387407,
+      "recall": 0.8767392191965828,
+      "f1": 0.9239158316301622,
+      "roc_auc": 0.9822739848561798
+    },
+    "multisource_random_forest_threshold_0_40": {
+      "accuracy": 0.9261988974293109,
+      "precision": 0.9581377151799687,
+      "recall": 0.92301893903703,
+      "f1": 0.9402505159092,
+      "roc_auc": 0.9822739848561798
+    },
+    "heuristic_baseline": {
+      "accuracy": 0.8541168566855698,
+      "precision": 0.9992446821540848,
+      "recall": 0.7686956248625899,
+      "f1": 0.8689377263367181
+    }
+  }
+}
