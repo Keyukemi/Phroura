@@ -5,17 +5,35 @@ from pathlib import Path
 import pandas as pd
 
 from src.evaluation import (
+    build_adversarial_dataset_results,
+    build_cross_validation_results,
+    build_external_validation_results,
+    build_feature_ablation_results,
+    build_feature_importance_table,
     build_model_comparison_rows,
     build_error_analysis_rows,
+    build_multisource_retraining_results,
+    build_random_forest_tuning_results,
+    build_threshold_sweep_results,
     extract_random_forest_feature_importance,
     make_url_feature_split,
+    save_cross_validation_results,
+    save_adversarial_dataset_results,
+    save_external_validation_results,
+    save_feature_ablation_results,
+    save_feature_importance_table,
+    save_multisource_retraining_results,
     save_model_comparison,
     save_error_summary,
+    save_random_forest_tuning_results,
     save_random_forest_feature_importance,
     save_random_forest_error_analysis,
     save_random_forest_error_summary,
     summarize_error_analysis,
 )
+from src.inference import build_model_artifact, save_model_artifact
+from src.model_training import train_random_forest
+from src.training import make_train_test_split
 
 
 def _sample_dataset() -> pd.DataFrame:
@@ -179,6 +197,46 @@ class EvaluationTests(unittest.TestCase):
             self.assertTrue(output_path.exists())
             self.assertGreater(len(rows), 0)
 
+    def test_build_feature_importance_table_adds_report_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            importance_path = Path(temp_dir) / "importance.json"
+            importance_path.write_text(
+                """
+[
+  {"feature": "uses_https", "importance": 0.5},
+  {"feature": "entropy", "importance": 0.25}
+]
+""".strip(),
+                encoding="utf-8",
+            )
+
+            table = build_feature_importance_table(importance_path)
+
+            self.assertEqual(list(table["rank"]), [1, 2])
+            self.assertIn("feature_group", table.columns)
+            self.assertIn("interpretation", table.columns)
+            self.assertIn("caution", table.columns)
+            self.assertEqual(table.loc[0, "feature_group"], "binary_indicators")
+
+    def test_save_feature_importance_table_writes_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            importance_path = Path(temp_dir) / "importance.json"
+            output_path = Path(temp_dir) / "feature_table.csv"
+            importance_path.write_text(
+                """
+[
+  {"feature": "uses_https", "importance": 0.5},
+  {"feature": "entropy", "importance": 0.25}
+]
+""".strip(),
+                encoding="utf-8",
+            )
+
+            table = save_feature_importance_table(importance_path=importance_path, output_path=output_path)
+
+            self.assertTrue(output_path.exists())
+            self.assertEqual(list(pd.read_csv(output_path).columns), list(table.columns))
+
     def test_build_model_comparison_rows_sorts_by_f1(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             weak_path = Path(temp_dir) / "weak.json"
@@ -241,6 +299,363 @@ class EvaluationTests(unittest.TestCase):
 
             self.assertTrue(output_path.exists())
             self.assertEqual(len(comparison), 1)
+
+    def test_build_cross_validation_results_returns_model_metric_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_path = Path(temp_dir) / "dataset.csv"
+            _sample_dataset().to_csv(dataset_path, index=False)
+
+            results = build_cross_validation_results(dataset_path=dataset_path, folds=3, random_state=5)
+
+            self.assertEqual(set(results["model"]), {"logistic_regression", "random_forest", "svm"})
+            self.assertEqual(set(results["folds"]), {3})
+            self.assertEqual(set(results["rows"]), {12})
+            for metric_name in ["precision", "recall", "f1", "roc_auc"]:
+                self.assertIn(f"{metric_name}_mean", results.columns)
+                self.assertIn(f"{metric_name}_std", results.columns)
+
+    def test_save_cross_validation_results_writes_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_path = Path(temp_dir) / "dataset.csv"
+            output_path = Path(temp_dir) / "cross_validation.csv"
+            _sample_dataset().to_csv(dataset_path, index=False)
+
+            results = save_cross_validation_results(
+                dataset_path=dataset_path,
+                output_path=output_path,
+                folds=3,
+                random_state=5,
+            )
+
+            self.assertTrue(output_path.exists())
+            self.assertEqual(list(pd.read_csv(output_path).columns), list(results.columns))
+
+    def test_build_random_forest_tuning_results_returns_search_rows_and_best_params(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_path = Path(temp_dir) / "dataset.csv"
+            _sample_dataset().to_csv(dataset_path, index=False)
+
+            results, best_params = build_random_forest_tuning_results(
+                dataset_path=dataset_path,
+                folds=3,
+                n_iter=2,
+                random_state=5,
+            )
+
+            self.assertEqual(len(results), 2)
+            self.assertIn("rank_test_score", results.columns)
+            self.assertIn("param_n_estimators", results.columns)
+            self.assertIn("best_params", best_params)
+            self.assertIn("best_score", best_params)
+            self.assertEqual(best_params["folds"], 3)
+            self.assertEqual(best_params["n_iter"], 2)
+
+    def test_save_random_forest_tuning_results_writes_csv_and_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_path = Path(temp_dir) / "dataset.csv"
+            results_path = Path(temp_dir) / "tuning.csv"
+            best_params_path = Path(temp_dir) / "best_params.json"
+            _sample_dataset().to_csv(dataset_path, index=False)
+
+            results, best_params = save_random_forest_tuning_results(
+                dataset_path=dataset_path,
+                results_output_path=results_path,
+                best_params_output_path=best_params_path,
+                folds=3,
+                n_iter=2,
+                random_state=5,
+            )
+
+            self.assertTrue(results_path.exists())
+            self.assertTrue(best_params_path.exists())
+            self.assertEqual(list(pd.read_csv(results_path).columns), list(results.columns))
+            self.assertEqual(best_params["n_iter"], 2)
+
+    def test_build_feature_ablation_results_returns_baseline_and_group_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_path = Path(temp_dir) / "dataset.csv"
+            _sample_dataset().to_csv(dataset_path, index=False)
+
+            results = build_feature_ablation_results(dataset_path=dataset_path, folds=3, random_state=5)
+
+            self.assertEqual(len(results), 7)
+            self.assertIn("all_features", set(results["experiment"]))
+            self.assertIn("without_length_features", set(results["experiment"]))
+            self.assertIn("without_complexity_features", set(results["experiment"]))
+            self.assertIn("f1_delta_from_all_features", results.columns)
+            self.assertIn("recall_delta_from_all_features", results.columns)
+            self.assertIn("roc_auc_delta_from_all_features", results.columns)
+
+    def test_save_feature_ablation_results_writes_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_path = Path(temp_dir) / "dataset.csv"
+            output_path = Path(temp_dir) / "ablation.csv"
+            _sample_dataset().to_csv(dataset_path, index=False)
+
+            results = save_feature_ablation_results(
+                dataset_path=dataset_path,
+                output_path=output_path,
+                folds=3,
+                random_state=5,
+            )
+
+            self.assertTrue(output_path.exists())
+            self.assertEqual(list(pd.read_csv(output_path).columns), list(results.columns))
+
+    def test_build_adversarial_dataset_results_filters_and_scores_external_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_path = Path(temp_dir) / "model.joblib"
+            external_path = Path(temp_dir) / "external.csv"
+            split = make_train_test_split(_sample_dataset(), test_size=0.33, random_state=5)
+            model = train_random_forest(split, random_state=5)
+            save_model_artifact(build_model_artifact(model), model_path)
+            pd.DataFrame(
+                {
+                    "url": [
+                        "http://short.ly/verify-login",
+                        "https://www.rmit.edu.au/",
+                        "http://192.168.0.10/account",
+                    ],
+                    "status": ["phishing", "legitimate", "phishing"],
+                    "shortening_service": [1, 0, 0],
+                    "ip": [0, 0, 1],
+                    "nb_at": [0, 0, 0],
+                }
+            ).to_csv(external_path, index=False)
+
+            results, summary = build_adversarial_dataset_results(
+                external_dataset_path=external_path,
+                model_path=model_path,
+            )
+
+            self.assertEqual(len(results), 2)
+            self.assertEqual(summary["phishing_rows"], 2)
+            self.assertEqual(summary["benign_rows"], 0)
+            self.assertIn("url_shortening", summary["attack_type_counts"])
+            self.assertIn("ip_host", summary["attack_type_counts"])
+            self.assertIn("random_forest_prediction", results.columns)
+            self.assertIn("heuristic_prediction", results.columns)
+
+    def test_save_adversarial_dataset_results_writes_csv_and_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_path = Path(temp_dir) / "model.joblib"
+            external_path = Path(temp_dir) / "external.csv"
+            results_path = Path(temp_dir) / "adversarial.csv"
+            summary_path = Path(temp_dir) / "adversarial.json"
+            split = make_train_test_split(_sample_dataset(), test_size=0.33, random_state=5)
+            model = train_random_forest(split, random_state=5)
+            save_model_artifact(build_model_artifact(model), model_path)
+            pd.DataFrame(
+                {
+                    "url": ["http://example.com@192.168.0.10/login"],
+                    "status": ["phishing"],
+                    "nb_at": [1],
+                }
+            ).to_csv(external_path, index=False)
+
+            results, summary = save_adversarial_dataset_results(
+                external_dataset_path=external_path,
+                results_output_path=results_path,
+                summary_output_path=summary_path,
+                model_path=model_path,
+            )
+
+            self.assertTrue(results_path.exists())
+            self.assertTrue(summary_path.exists())
+            self.assertEqual(list(pd.read_csv(results_path).columns), list(results.columns))
+            self.assertEqual(summary["rows"], 1)
+
+    def test_build_external_validation_results_scores_all_labelled_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_path = Path(temp_dir) / "model.joblib"
+            external_path = Path(temp_dir) / "external.csv"
+            split = make_train_test_split(_sample_dataset(), test_size=0.33, random_state=5)
+            model = train_random_forest(split, random_state=5)
+            save_model_artifact(build_model_artifact(model), model_path)
+            pd.DataFrame(
+                {
+                    "url": [
+                        "https://www.rmit.edu.au/",
+                        "http://192.168.0.10/account",
+                    ],
+                    "status": ["legitimate", "phishing"],
+                }
+            ).to_csv(external_path, index=False)
+
+            results, summary = build_external_validation_results(
+                external_dataset_path=external_path,
+                model_path=model_path,
+            )
+
+            self.assertEqual(len(results), 2)
+            self.assertEqual(summary["rows"], 2)
+            self.assertEqual(summary["phishing_rows"], 1)
+            self.assertEqual(summary["benign_rows"], 1)
+            self.assertIn("random_forest", summary)
+            self.assertIn("heuristic_baseline", summary)
+
+    def test_save_external_validation_results_writes_csv_and_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            model_path = Path(temp_dir) / "model.joblib"
+            external_path = Path(temp_dir) / "external.csv"
+            results_path = Path(temp_dir) / "external_results.csv"
+            summary_path = Path(temp_dir) / "external_summary.json"
+            split = make_train_test_split(_sample_dataset(), test_size=0.33, random_state=5)
+            model = train_random_forest(split, random_state=5)
+            save_model_artifact(build_model_artifact(model), model_path)
+            pd.DataFrame(
+                {
+                    "url": [
+                        "https://www.rmit.edu.au/",
+                        "http://192.168.0.10/account",
+                    ],
+                    "status": ["legitimate", "phishing"],
+                }
+            ).to_csv(external_path, index=False)
+
+            results, summary = save_external_validation_results(
+                external_dataset_path=external_path,
+                results_output_path=results_path,
+                summary_output_path=summary_path,
+                model_path=model_path,
+            )
+
+            self.assertTrue(results_path.exists())
+            self.assertTrue(summary_path.exists())
+            self.assertEqual(list(pd.read_csv(results_path).columns), list(results.columns))
+            self.assertEqual(summary["rows"], 2)
+
+    def test_build_threshold_sweep_results_returns_metric_rows(self) -> None:
+        labels = pd.Series([0, 1, 1, 0])
+        probabilities = pd.Series([0.1, 0.8, 0.4, 0.6])
+
+        sweep = build_threshold_sweep_results(labels, probabilities, threshold_values=(0.3, 0.5))
+
+        self.assertEqual(list(sweep["threshold"]), [0.3, 0.5])
+        self.assertIn("precision", sweep.columns)
+        self.assertIn("recall", sweep.columns)
+        self.assertIn("f1", sweep.columns)
+
+    def test_build_multisource_retraining_results_returns_sweep_comparison_and_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_path = Path(temp_dir) / "original.csv"
+            external_train_path = Path(temp_dir) / "external_train.csv"
+            external_test_path = Path(temp_dir) / "external_test.csv"
+            best_params_path = Path(temp_dir) / "best_params.json"
+            _sample_dataset().to_csv(original_path, index=False)
+            pd.DataFrame(
+                {
+                    "url": [
+                        "https://www.example.edu/",
+                        "http://verify-login.example.test/account",
+                        "https://www.university.edu/",
+                        "http://192.168.0.55/password",
+                    ],
+                    "status": ["legitimate", "phishing", "legitimate", "phishing"],
+                }
+            ).to_csv(external_train_path, index=False)
+            pd.DataFrame(
+                {
+                    "url": [
+                        "https://www.rmit.edu.au/",
+                        "http://192.168.0.10/account",
+                    ],
+                    "status": ["legitimate", "phishing"],
+                }
+            ).to_csv(external_test_path, index=False)
+            best_params_path.write_text(
+                """
+{
+  "best_params": {
+    "n_estimators": 10,
+    "min_samples_split": 2,
+    "min_samples_leaf": 1,
+    "max_depth": 4,
+    "class_weight": "balanced"
+  }
+}
+""".strip(),
+                encoding="utf-8",
+            )
+
+            _, sweep, comparison, summary = build_multisource_retraining_results(
+                original_dataset_path=original_path,
+                external_train_path=external_train_path,
+                external_test_path=external_test_path,
+                best_params_path=best_params_path,
+                threshold_values=(0.3, 0.5),
+                random_state=5,
+            )
+
+            self.assertEqual(len(sweep), 2)
+            self.assertEqual(len(comparison), 3)
+            self.assertEqual(summary["external_test_rows"], 2)
+            self.assertIn("best_f1_threshold", summary)
+
+    def test_save_multisource_retraining_results_writes_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_path = Path(temp_dir) / "original.csv"
+            external_train_path = Path(temp_dir) / "external_train.csv"
+            external_test_path = Path(temp_dir) / "external_test.csv"
+            best_params_path = Path(temp_dir) / "best_params.json"
+            model_path = Path(temp_dir) / "model.joblib"
+            threshold_path = Path(temp_dir) / "thresholds.csv"
+            comparison_path = Path(temp_dir) / "comparison.csv"
+            summary_path = Path(temp_dir) / "summary.json"
+            _sample_dataset().to_csv(original_path, index=False)
+            pd.DataFrame(
+                {
+                    "url": [
+                        "https://www.example.edu/",
+                        "http://verify-login.example.test/account",
+                    ],
+                    "status": ["legitimate", "phishing"],
+                }
+            ).to_csv(external_train_path, index=False)
+            pd.DataFrame(
+                {
+                    "url": [
+                        "https://www.rmit.edu.au/",
+                        "http://192.168.0.10/account",
+                    ],
+                    "status": ["legitimate", "phishing"],
+                }
+            ).to_csv(external_test_path, index=False)
+            best_params_path.write_text(
+                """
+{
+  "best_params": {
+    "n_estimators": 10,
+    "min_samples_split": 2,
+    "min_samples_leaf": 1,
+    "max_depth": 4,
+    "class_weight": "balanced"
+  }
+}
+""".strip(),
+                encoding="utf-8",
+            )
+
+            sweep, comparison, summary = save_multisource_retraining_results(
+                original_dataset_path=original_path,
+                external_train_path=external_train_path,
+                external_test_path=external_test_path,
+                best_params_path=best_params_path,
+                model_output_path=model_path,
+                threshold_output_path=threshold_path,
+                comparison_output_path=comparison_path,
+                summary_output_path=summary_path,
+                threshold_values=(0.3, 0.5),
+                random_state=5,
+            )
+
+            self.assertTrue(model_path.exists())
+            self.assertTrue(threshold_path.exists())
+            self.assertTrue(comparison_path.exists())
+            self.assertTrue(summary_path.exists())
+            self.assertEqual(len(sweep), 2)
+            self.assertEqual(len(comparison), 3)
+            self.assertEqual(summary["external_test_rows"], 2)
 
 
 if __name__ == "__main__":

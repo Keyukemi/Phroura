@@ -9,17 +9,54 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, roc_auc_score
+from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold, cross_validate, train_test_split
 
+from src.baseline import HEURISTIC_THRESHOLD, score_features
 from src.features import FEATURE_NAMES, extract_feature_rows
-from src.model_training import MODEL_METRICS_PATHS, train_random_forest
-from src.training import DATASET_PATH, DEFAULT_RANDOM_STATE, DEFAULT_TEST_SIZE, FeatureSplit, clean_url_dataset, load_url_dataset
+from src.inference import DEFAULT_MODEL_PATH, DEFAULT_PHISHING_THRESHOLD, build_model_artifact, load_model_artifact, save_model_artifact
+from src.model_training import (
+    MODEL_METRICS_PATHS,
+    build_logistic_regression_model,
+    build_random_forest_model,
+    build_svm_model,
+    train_random_forest,
+)
+from src.training import (
+    DATASET_PATH,
+    DEFAULT_RANDOM_STATE,
+    DEFAULT_TEST_SIZE,
+    FeatureSplit,
+    build_feature_matrix,
+    clean_url_dataset,
+    load_url_dataset,
+)
 
 
 RANDOM_FOREST_ERROR_ANALYSIS_PATH = Path("models/random_forest_error_analysis.csv")
 RANDOM_FOREST_ERROR_SUMMARY_PATH = Path("models/random_forest_error_summary.json")
 RANDOM_FOREST_FEATURE_IMPORTANCE_PATH = Path("models/random_forest_feature_importance.json")
 MODEL_COMPARISON_PATH = Path("models/model_comparison.csv")
+CROSS_VALIDATION_RESULTS_PATH = Path("models/cross_validation_results.csv")
+RANDOM_FOREST_TUNING_RESULTS_PATH = Path("models/random_forest_tuning_results.csv")
+RANDOM_FOREST_BEST_PARAMS_PATH = Path("models/random_forest_best_params.json")
+ABLATION_RESULTS_PATH = Path("models/ablation_results.csv")
+FEATURE_IMPORTANCE_TABLE_PATH = Path("models/feature_importance_table.csv")
+ADVERSARIAL_TEST_RESULTS_PATH = Path("models/adversarial_test_results.csv")
+ADVERSARIAL_TEST_SUMMARY_PATH = Path("models/adversarial_test_summary.json")
+EXTERNAL_VALIDATION_RESULTS_PATH = Path("models/external_validation_results.csv")
+EXTERNAL_VALIDATION_SUMMARY_PATH = Path("models/external_validation_summary.json")
+MULTISOURCE_MODEL_PATH = Path("models/multisource_random_forest_model.joblib")
+THRESHOLD_SWEEP_RESULTS_PATH = Path("models/threshold_sweep_results.csv")
+MULTISOURCE_MODEL_COMPARISON_PATH = Path("models/multisource_model_comparison.csv")
+MULTISOURCE_EXTERNAL_VALIDATION_SUMMARY_PATH = Path("models/multisource_external_validation_summary.json")
+DEFAULT_THRESHOLD_VALUES = (0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70)
+CV_SCORING = {
+    "precision": "precision",
+    "recall": "recall",
+    "f1": "f1",
+    "roc_auc": "roc_auc",
+}
 ERROR_ANALYSIS_FEATURE_COLUMNS = [
     "url_length",
     "hostname_length",
@@ -61,6 +98,174 @@ ERROR_SUMMARY_NUMERIC_COLUMNS = [
     "entropy",
     "suspicious_keyword_count",
 ]
+FEATURE_GROUPS = {
+    "length_features": [
+        "url_length",
+        "hostname_length",
+        "path_length",
+        "query_length",
+    ],
+    "character_composition": [
+        "digit_count",
+        "letter_count",
+        "special_char_count",
+        "dot_count",
+        "hyphen_count",
+        "underscore_count",
+        "slash_count",
+        "question_mark_count",
+        "equals_count",
+        "ampersand_count",
+        "at_symbol_count",
+        "digit_ratio",
+        "special_char_ratio",
+        "hostname_digit_ratio",
+    ],
+    "structural_features": [
+        "path_depth",
+        "query_parameter_count",
+        "subdomain_count",
+    ],
+    "binary_indicators": [
+        "uses_https",
+        "has_ip_host",
+        "has_port",
+        "has_query",
+        "has_fragment",
+    ],
+    "keyword_features": [
+        "suspicious_keyword_count",
+    ],
+    "complexity_features": [
+        "entropy",
+    ],
+}
+FEATURE_INTERPRETATIONS = {
+    "uses_https": (
+        "Indicates whether the URL uses HTTPS.",
+        "Dataset-dependent signal; HTTPS should not be interpreted as proof of safety or danger.",
+    ),
+    "entropy": (
+        "Measures character randomness and possible obfuscation.",
+        "High entropy can also appear in legitimate generated URLs.",
+    ),
+    "digit_ratio": (
+        "Measures how much of the URL is numeric.",
+        "Numeric-heavy URLs can be suspicious but are not always malicious.",
+    ),
+    "digit_count": (
+        "Counts numeric characters in the URL.",
+        "Useful for generated-looking URLs, but some benign URLs contain IDs.",
+    ),
+    "url_length": (
+        "Measures total URL length.",
+        "Long URLs may indicate tracking or obfuscation but are not inherently phishing.",
+    ),
+    "path_length": (
+        "Measures length of the URL path.",
+        "Long paths can appear in both phishing and legitimate web applications.",
+    ),
+    "special_char_ratio": (
+        "Measures the proportion of non-alphanumeric characters.",
+        "Special characters can indicate obfuscation but also normal query/path syntax.",
+    ),
+    "letter_count": (
+        "Counts alphabetic characters in the URL.",
+        "Acts as a general lexical composition signal.",
+    ),
+    "hyphen_count": (
+        "Counts hyphens in the URL.",
+        "Hyphens can be used in deceptive domains but are common in benign domains too.",
+    ),
+    "hostname_length": (
+        "Measures domain and subdomain length.",
+        "Long hostnames can indicate suspicious subdomain structures.",
+    ),
+    "dot_count": (
+        "Counts dot characters in the URL.",
+        "Many dots may indicate deep subdomain nesting.",
+    ),
+    "path_depth": (
+        "Counts path segments.",
+        "Deep paths may reflect complex routing or phishing landing pages.",
+    ),
+    "subdomain_count": (
+        "Counts subdomain levels before the registered domain.",
+        "Useful for detecting deceptive nested subdomains.",
+    ),
+    "slash_count": (
+        "Counts slash characters.",
+        "Correlates with URL structure and path depth.",
+    ),
+    "special_char_count": (
+        "Counts non-alphanumeric characters.",
+        "Captures punctuation-heavy or encoded-looking URLs.",
+    ),
+    "hostname_digit_ratio": (
+        "Measures numeric density in the hostname.",
+        "May indicate generated domains, but some benign services use digits.",
+    ),
+    "suspicious_keyword_count": (
+        "Counts security or account-related words.",
+        "Useful supporting signal, but easy for attackers to avoid.",
+    ),
+    "query_length": (
+        "Measures query string length.",
+        "Long queries may reflect tracking, forms, or obfuscation.",
+    ),
+    "equals_count": (
+        "Counts equals signs in query parameters.",
+        "Mostly reflects query string structure.",
+    ),
+    "at_symbol_count": (
+        "Counts at symbols.",
+        "Can indicate URL obfuscation, though rare in this dataset.",
+    ),
+    "query_parameter_count": (
+        "Counts query parameters.",
+        "Captures URL parameter complexity.",
+    ),
+    "has_query": (
+        "Indicates whether a query string is present.",
+        "Low-level structure signal.",
+    ),
+    "underscore_count": (
+        "Counts underscores.",
+        "Minor lexical composition signal.",
+    ),
+    "ampersand_count": (
+        "Counts ampersands in query strings.",
+        "Mostly reflects multiple query parameters.",
+    ),
+    "question_mark_count": (
+        "Counts question marks.",
+        "Mostly indicates query string presence.",
+    ),
+    "has_fragment": (
+        "Indicates whether a URL fragment is present.",
+        "Low-importance structure signal in this dataset.",
+    ),
+    "has_ip_host": (
+        "Indicates whether the hostname is an IP address.",
+        "Important cybersecurity signal, but rare in this dataset.",
+    ),
+    "has_port": (
+        "Indicates whether a custom port is present.",
+        "Potentially suspicious but rare in this dataset.",
+    ),
+}
+ADVERSARIAL_INDICATORS = {
+    "punycode": "punycode_or_homograph_style",
+    "shortening_service": "url_shortening",
+    "nb_at": "at_symbol_obfuscation",
+    "ip": "ip_host",
+    "abnormal_subdomain": "abnormal_subdomain",
+    "brand_in_subdomain": "brand_in_subdomain",
+    "brand_in_path": "brand_in_path",
+    "random_domain": "random_domain",
+}
+PHISHING_LABEL_VALUES = {"phishing", "phish", "malicious", "bad", "1", 1, True}
+BENIGN_LABEL_VALUES = {"legitimate", "benign", "safe", "good", "0", 0, False}
 
 
 @dataclass(frozen=True)
@@ -231,6 +436,45 @@ def save_random_forest_feature_importance(
     return importance_rows
 
 
+def build_feature_importance_table(
+    importance_path: str | Path = RANDOM_FOREST_FEATURE_IMPORTANCE_PATH,
+) -> pd.DataFrame:
+    """Build a report-ready Random Forest feature importance table."""
+
+    importance_rows = json.loads(Path(importance_path).read_text(encoding="utf-8"))
+    rows = []
+    for rank, row in enumerate(importance_rows, start=1):
+        feature = row["feature"]
+        interpretation, caution = FEATURE_INTERPRETATIONS.get(
+            feature,
+            ("Lexical URL signal used by the model.", "Interpret alongside ablation and error analysis."),
+        )
+        rows.append(
+            {
+                "rank": rank,
+                "feature": feature,
+                "importance": float(row["importance"]),
+                "feature_group": _feature_group_for_feature(feature),
+                "interpretation": interpretation,
+                "caution": caution,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def save_feature_importance_table(
+    importance_path: str | Path = RANDOM_FOREST_FEATURE_IMPORTANCE_PATH,
+    output_path: str | Path = FEATURE_IMPORTANCE_TABLE_PATH,
+) -> pd.DataFrame:
+    """Save a report-ready feature importance table as CSV."""
+
+    table = build_feature_importance_table(importance_path)
+    table_path = Path(output_path)
+    table_path.parent.mkdir(parents=True, exist_ok=True)
+    table.to_csv(table_path, index=False)
+    return table
+
+
 def build_model_comparison_rows(
     metric_paths: dict[str, str | Path] = MODEL_METRICS_PATHS,
 ) -> pd.DataFrame:
@@ -272,12 +516,693 @@ def save_model_comparison(
     return comparison
 
 
+def build_cross_validation_results(
+    dataset_path: str | Path = DATASET_PATH,
+    folds: int = 5,
+    random_state: int = DEFAULT_RANDOM_STATE,
+) -> pd.DataFrame:
+    """Evaluate supported ML models with stratified k-fold cross-validation."""
+
+    dataset = load_url_dataset(dataset_path)
+    features, labels = build_feature_matrix(dataset)
+    cross_validator = StratifiedKFold(n_splits=folds, shuffle=True, random_state=random_state)
+    models = {
+        "logistic_regression": build_logistic_regression_model(random_state=random_state),
+        "random_forest": build_random_forest_model(random_state=random_state),
+        "svm": build_svm_model(random_state=random_state),
+    }
+
+    rows = []
+    for model_name, model in models.items():
+        scores = cross_validate(
+            model,
+            features,
+            labels,
+            cv=cross_validator,
+            scoring=CV_SCORING,
+            error_score="raise",
+        )
+        row: dict[str, Any] = {
+            "model": model_name,
+            "folds": folds,
+            "rows": int(len(labels)),
+        }
+        for metric_name in CV_SCORING:
+            metric_scores = scores[f"test_{metric_name}"]
+            row[f"{metric_name}_mean"] = float(metric_scores.mean())
+            row[f"{metric_name}_std"] = float(metric_scores.std())
+        rows.append(row)
+
+    return pd.DataFrame(rows).sort_values("f1_mean", ascending=False).reset_index(drop=True)
+
+
+def save_cross_validation_results(
+    dataset_path: str | Path = DATASET_PATH,
+    output_path: str | Path = CROSS_VALIDATION_RESULTS_PATH,
+    folds: int = 5,
+    random_state: int = DEFAULT_RANDOM_STATE,
+) -> pd.DataFrame:
+    """Save stratified k-fold cross-validation results as a report-ready CSV."""
+
+    results = build_cross_validation_results(
+        dataset_path=dataset_path,
+        folds=folds,
+        random_state=random_state,
+    )
+    results_path = Path(output_path)
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    results.to_csv(results_path, index=False)
+    return results
+
+
+def build_random_forest_tuning_results(
+    dataset_path: str | Path = DATASET_PATH,
+    folds: int = 3,
+    n_iter: int = 12,
+    random_state: int = DEFAULT_RANDOM_STATE,
+    scoring: str = "f1",
+    n_jobs: int = 1,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Tune Random Forest hyperparameters with randomized cross-validation search."""
+
+    dataset = load_url_dataset(dataset_path)
+    features, labels = build_feature_matrix(dataset)
+    cross_validator = StratifiedKFold(n_splits=folds, shuffle=True, random_state=random_state)
+    search = RandomizedSearchCV(
+        estimator=build_random_forest_model(random_state=random_state),
+        param_distributions={
+            "n_estimators": [100, 200, 300],
+            "max_depth": [8, 12, 16, None],
+            "min_samples_split": [2, 5, 10],
+            "min_samples_leaf": [1, 2, 4],
+            "class_weight": ["balanced", "balanced_subsample"],
+        },
+        n_iter=n_iter,
+        scoring=scoring,
+        cv=cross_validator,
+        n_jobs=n_jobs,
+        random_state=random_state,
+        return_train_score=True,
+        error_score="raise",
+    )
+    search.fit(features, labels)
+
+    results = pd.DataFrame(search.cv_results_)
+    selected_columns = [
+        "rank_test_score",
+        "mean_test_score",
+        "std_test_score",
+        "mean_train_score",
+        "std_train_score",
+        "mean_fit_time",
+        "param_n_estimators",
+        "param_max_depth",
+        "param_min_samples_split",
+        "param_min_samples_leaf",
+        "param_class_weight",
+    ]
+    tuning_results = results.loc[:, selected_columns].sort_values("rank_test_score").reset_index(drop=True)
+    best_params = {
+        "best_params": _json_ready(search.best_params_),
+        "best_score": float(search.best_score_),
+        "folds": folds,
+        "n_iter": n_iter,
+        "scoring": scoring,
+        "rows": int(len(labels)),
+        "n_jobs": n_jobs,
+    }
+    return tuning_results, best_params
+
+
+def save_random_forest_tuning_results(
+    dataset_path: str | Path = DATASET_PATH,
+    results_output_path: str | Path = RANDOM_FOREST_TUNING_RESULTS_PATH,
+    best_params_output_path: str | Path = RANDOM_FOREST_BEST_PARAMS_PATH,
+    folds: int = 3,
+    n_iter: int = 12,
+    random_state: int = DEFAULT_RANDOM_STATE,
+    scoring: str = "f1",
+    n_jobs: int = 1,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Save Random Forest tuning results and the best parameter set."""
+
+    tuning_results, best_params = build_random_forest_tuning_results(
+        dataset_path=dataset_path,
+        folds=folds,
+        n_iter=n_iter,
+        random_state=random_state,
+        scoring=scoring,
+        n_jobs=n_jobs,
+    )
+    results_path = Path(results_output_path)
+    params_path = Path(best_params_output_path)
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    params_path.parent.mkdir(parents=True, exist_ok=True)
+    tuning_results.to_csv(results_path, index=False)
+    params_path.write_text(json.dumps(best_params, indent=2), encoding="utf-8")
+    return tuning_results, best_params
+
+
+def build_feature_ablation_results(
+    dataset_path: str | Path = DATASET_PATH,
+    folds: int = 5,
+    random_state: int = DEFAULT_RANDOM_STATE,
+) -> pd.DataFrame:
+    """Evaluate Random Forest after removing each lexical feature group."""
+
+    dataset = load_url_dataset(dataset_path)
+    features, labels = build_feature_matrix(dataset)
+    baseline_scores = _cross_validate_random_forest_features(
+        features=features,
+        labels=labels,
+        folds=folds,
+        random_state=random_state,
+    )
+    rows = [
+        {
+            "experiment": "all_features",
+            "removed_group": "",
+            "removed_feature_count": 0,
+            "remaining_feature_count": int(len(features.columns)),
+            "removed_features": "",
+            **baseline_scores,
+        }
+    ]
+
+    for group_name, removed_features in FEATURE_GROUPS.items():
+        remaining_features = features.drop(columns=removed_features)
+        scores = _cross_validate_random_forest_features(
+            features=remaining_features,
+            labels=labels,
+            folds=folds,
+            random_state=random_state,
+        )
+        rows.append(
+            {
+                "experiment": f"without_{group_name}",
+                "removed_group": group_name,
+                "removed_feature_count": len(removed_features),
+                "remaining_feature_count": int(len(remaining_features.columns)),
+                "removed_features": ", ".join(removed_features),
+                **scores,
+            }
+        )
+
+    results = pd.DataFrame(rows)
+    results["f1_delta_from_all_features"] = results["f1_mean"] - baseline_scores["f1_mean"]
+    results["recall_delta_from_all_features"] = results["recall_mean"] - baseline_scores["recall_mean"]
+    results["roc_auc_delta_from_all_features"] = results["roc_auc_mean"] - baseline_scores["roc_auc_mean"]
+    return results.sort_values("f1_mean", ascending=False).reset_index(drop=True)
+
+
+def save_feature_ablation_results(
+    dataset_path: str | Path = DATASET_PATH,
+    output_path: str | Path = ABLATION_RESULTS_PATH,
+    folds: int = 5,
+    random_state: int = DEFAULT_RANDOM_STATE,
+) -> pd.DataFrame:
+    """Save Random Forest feature ablation results as a report-ready CSV."""
+
+    results = build_feature_ablation_results(
+        dataset_path=dataset_path,
+        folds=folds,
+        random_state=random_state,
+    )
+    results_path = Path(output_path)
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    results.to_csv(results_path, index=False)
+    return results
+
+
+def build_adversarial_dataset_results(
+    external_dataset_path: str | Path,
+    model_path: str | Path = DEFAULT_MODEL_PATH,
+    threshold: float = DEFAULT_PHISHING_THRESHOLD,
+    include_benign: bool = False,
+    max_rows: int | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Evaluate the deployed model on adversarial-style rows from an external URL dataset."""
+
+    external_dataset = _load_tabular_dataset(external_dataset_path)
+    required_columns = {"url", "status"}
+    missing_columns = required_columns.difference(external_dataset.columns)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        raise ValueError(f"External dataset is missing required columns: {missing}")
+
+    indicator_columns = [column for column in ADVERSARIAL_INDICATORS if column in external_dataset.columns]
+    if not indicator_columns:
+        expected = ", ".join(sorted(ADVERSARIAL_INDICATORS))
+        raise ValueError(f"External dataset must contain at least one adversarial indicator column: {expected}")
+
+    prepared = external_dataset.copy()
+    prepared["label"] = prepared["status"].map(_normalize_external_label)
+    prepared = prepared.dropna(subset=["url", "label"])
+    if not include_benign:
+        prepared = prepared[prepared["label"] == 1]
+    prepared["attack_types"] = prepared.apply(lambda row: _attack_types_for_external_row(row, indicator_columns), axis=1)
+    prepared = prepared[prepared["attack_types"] != ""].reset_index(drop=True)
+    if max_rows is not None:
+        prepared = prepared.head(max_rows).copy()
+
+    artifact = load_model_artifact(model_path)
+    model = artifact["model"]
+    feature_names = artifact["feature_names"]
+    rows = []
+    for _, source_row in prepared.iterrows():
+        features = extract_feature_rows([source_row["url"]])[0]
+        feature_frame = pd.DataFrame([[features[name] for name in feature_names]], columns=feature_names)
+        phishing_probability = float(model.predict_proba(feature_frame)[0][1])
+        random_forest_prediction = int(phishing_probability >= threshold)
+        heuristic_score, _ = score_features(features)
+        heuristic_prediction = int(heuristic_score >= HEURISTIC_THRESHOLD)
+        label = int(source_row["label"])
+        rows.append(
+            {
+                "url": source_row["url"],
+                "source_label": label,
+                "attack_types": source_row["attack_types"],
+                "random_forest_prediction": random_forest_prediction,
+                "random_forest_phishing_probability": phishing_probability,
+                "random_forest_correct": int(random_forest_prediction == label),
+                "heuristic_score": heuristic_score,
+                "heuristic_prediction": heuristic_prediction,
+                "heuristic_correct": int(heuristic_prediction == label),
+            }
+        )
+
+    results = pd.DataFrame(rows)
+    summary = summarize_adversarial_dataset_results(results)
+    summary["source_path"] = str(external_dataset_path)
+    summary["include_benign"] = include_benign
+    summary["max_rows"] = max_rows
+    summary["indicator_columns"] = indicator_columns
+    return results, summary
+
+
+def save_adversarial_dataset_results(
+    external_dataset_path: str | Path,
+    results_output_path: str | Path = ADVERSARIAL_TEST_RESULTS_PATH,
+    summary_output_path: str | Path = ADVERSARIAL_TEST_SUMMARY_PATH,
+    model_path: str | Path = DEFAULT_MODEL_PATH,
+    threshold: float = DEFAULT_PHISHING_THRESHOLD,
+    include_benign: bool = False,
+    max_rows: int | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Save external adversarial-style robustness results and summary."""
+
+    results, summary = build_adversarial_dataset_results(
+        external_dataset_path=external_dataset_path,
+        model_path=model_path,
+        threshold=threshold,
+        include_benign=include_benign,
+        max_rows=max_rows,
+    )
+    results_path = Path(results_output_path)
+    summary_path = Path(summary_output_path)
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    results.to_csv(results_path, index=False)
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return results, summary
+
+
+def build_external_validation_results(
+    external_dataset_path: str | Path,
+    model_path: str | Path = DEFAULT_MODEL_PATH,
+    threshold: float = DEFAULT_PHISHING_THRESHOLD,
+    max_rows: int | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Evaluate the deployed model on all labelled rows in an external URL dataset."""
+
+    external_dataset = _load_tabular_dataset(external_dataset_path)
+    required_columns = {"url", "status"}
+    missing_columns = required_columns.difference(external_dataset.columns)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        raise ValueError(f"External dataset is missing required columns: {missing}")
+
+    prepared = external_dataset.loc[:, ["url", "status"]].copy()
+    prepared["label"] = prepared["status"].map(_normalize_external_label)
+    prepared = prepared.dropna(subset=["url", "label"]).reset_index(drop=True)
+    if max_rows is not None:
+        prepared = prepared.head(max_rows).copy()
+
+    artifact = load_model_artifact(model_path)
+    model = artifact["model"]
+    feature_names = artifact["feature_names"]
+    rows = []
+    for _, source_row in prepared.iterrows():
+        features = extract_feature_rows([source_row["url"]])[0]
+        feature_frame = pd.DataFrame([[features[name] for name in feature_names]], columns=feature_names)
+        phishing_probability = float(model.predict_proba(feature_frame)[0][1])
+        random_forest_prediction = int(phishing_probability >= threshold)
+        heuristic_score, _ = score_features(features)
+        heuristic_prediction = int(heuristic_score >= HEURISTIC_THRESHOLD)
+        label = int(source_row["label"])
+        rows.append(
+            {
+                "url": source_row["url"],
+                "source_label": label,
+                "source_status": source_row["status"],
+                "random_forest_prediction": random_forest_prediction,
+                "random_forest_phishing_probability": phishing_probability,
+                "random_forest_correct": int(random_forest_prediction == label),
+                "heuristic_score": heuristic_score,
+                "heuristic_prediction": heuristic_prediction,
+                "heuristic_correct": int(heuristic_prediction == label),
+            }
+        )
+
+    results = pd.DataFrame(rows)
+    summary = summarize_external_validation_results(results)
+    summary["source_path"] = str(external_dataset_path)
+    summary["max_rows"] = max_rows
+    return results, summary
+
+
+def save_external_validation_results(
+    external_dataset_path: str | Path,
+    results_output_path: str | Path = EXTERNAL_VALIDATION_RESULTS_PATH,
+    summary_output_path: str | Path = EXTERNAL_VALIDATION_SUMMARY_PATH,
+    model_path: str | Path = DEFAULT_MODEL_PATH,
+    threshold: float = DEFAULT_PHISHING_THRESHOLD,
+    max_rows: int | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Save balanced external validation results and summary."""
+
+    results, summary = build_external_validation_results(
+        external_dataset_path=external_dataset_path,
+        model_path=model_path,
+        threshold=threshold,
+        max_rows=max_rows,
+    )
+    results_path = Path(results_output_path)
+    summary_path = Path(summary_output_path)
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    results.to_csv(results_path, index=False)
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return results, summary
+
+
+def build_multisource_retraining_results(
+    original_dataset_path: str | Path = DATASET_PATH,
+    external_train_path: str | Path = "data/external/pirocheto_phishing_url_train.parquet",
+    external_test_path: str | Path = "data/external/pirocheto_phishing_url_test.parquet",
+    best_params_path: str | Path = RANDOM_FOREST_BEST_PARAMS_PATH,
+    threshold_values: tuple[float, ...] = DEFAULT_THRESHOLD_VALUES,
+    random_state: int = DEFAULT_RANDOM_STATE,
+) -> tuple[Any, pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    """Train a tuned Random Forest on original plus external URLs and sweep thresholds."""
+
+    original_dataset = load_url_dataset(original_dataset_path)
+    external_train = _external_dataset_to_url_label_dataset(external_train_path)
+    combined_dataset = clean_url_dataset(pd.concat([original_dataset, external_train], ignore_index=True))
+    features, labels = build_feature_matrix(combined_dataset)
+
+    best_params = json.loads(Path(best_params_path).read_text(encoding="utf-8"))["best_params"]
+    model = build_random_forest_model(random_state=random_state)
+    model.set_params(**best_params)
+    model.fit(features, labels)
+
+    external_test = _external_dataset_to_url_label_dataset(external_test_path)
+    test_features, test_labels = build_feature_matrix(external_test)
+    probabilities = model.predict_proba(test_features)[:, 1]
+    threshold_sweep = build_threshold_sweep_results(test_labels, probabilities, threshold_values)
+    best_threshold_row = threshold_sweep.sort_values(["f1", "recall"], ascending=False).iloc[0]
+    default_threshold_row = threshold_sweep[threshold_sweep["threshold"] == DEFAULT_PHISHING_THRESHOLD]
+    if default_threshold_row.empty:
+        default_threshold_row = threshold_sweep.iloc[[0]]
+
+    heuristic_predictions = []
+    heuristic_scores = []
+    for _, feature_row in test_features.iterrows():
+        score, _ = score_features(feature_row.to_dict())
+        heuristic_scores.append(score)
+        heuristic_predictions.append(int(score >= HEURISTIC_THRESHOLD))
+
+    comparison = pd.DataFrame(
+        [
+            {
+                "model": "multisource_random_forest_default_threshold",
+                "threshold": float(default_threshold_row.iloc[0]["threshold"]),
+                "accuracy": float(default_threshold_row.iloc[0]["accuracy"]),
+                "precision": float(default_threshold_row.iloc[0]["precision"]),
+                "recall": float(default_threshold_row.iloc[0]["recall"]),
+                "f1": float(default_threshold_row.iloc[0]["f1"]),
+                "roc_auc": float(default_threshold_row.iloc[0]["roc_auc"]),
+            },
+            {
+                "model": "multisource_random_forest_best_f1_threshold",
+                "threshold": float(best_threshold_row["threshold"]),
+                "accuracy": float(best_threshold_row["accuracy"]),
+                "precision": float(best_threshold_row["precision"]),
+                "recall": float(best_threshold_row["recall"]),
+                "f1": float(best_threshold_row["f1"]),
+                "roc_auc": float(best_threshold_row["roc_auc"]),
+            },
+            {
+                "model": "heuristic_baseline",
+                "threshold": float(HEURISTIC_THRESHOLD),
+                **_prediction_summary(test_labels, pd.Series(heuristic_predictions), None),
+            },
+        ]
+    )
+
+    summary = _json_ready({
+        "original_training_rows": int(len(original_dataset)),
+        "external_training_rows": int(len(external_train)),
+        "combined_training_rows": int(len(combined_dataset)),
+        "external_test_rows": int(len(external_test)),
+        "phishing_test_rows": int((test_labels == 1).sum()),
+        "benign_test_rows": int((test_labels == 0).sum()),
+        "best_params": _json_ready(best_params),
+        "default_threshold": comparison.iloc[0].to_dict(),
+        "best_f1_threshold": comparison.iloc[1].to_dict(),
+        "heuristic_baseline": comparison.iloc[2].to_dict(),
+    })
+    return model, threshold_sweep, comparison, summary
+
+
+def build_threshold_sweep_results(
+    labels: pd.Series,
+    probabilities: Any,
+    threshold_values: tuple[float, ...] = DEFAULT_THRESHOLD_VALUES,
+) -> pd.DataFrame:
+    """Evaluate classification metrics over a set of probability thresholds."""
+
+    rows = []
+    for threshold in threshold_values:
+        predictions = pd.Series([int(probability >= threshold) for probability in probabilities])
+        row = {
+            "threshold": float(threshold),
+            **_prediction_summary(labels, predictions, pd.Series(probabilities)),
+        }
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def save_multisource_retraining_results(
+    original_dataset_path: str | Path = DATASET_PATH,
+    external_train_path: str | Path = "data/external/pirocheto_phishing_url_train.parquet",
+    external_test_path: str | Path = "data/external/pirocheto_phishing_url_test.parquet",
+    best_params_path: str | Path = RANDOM_FOREST_BEST_PARAMS_PATH,
+    model_output_path: str | Path = MULTISOURCE_MODEL_PATH,
+    threshold_output_path: str | Path = THRESHOLD_SWEEP_RESULTS_PATH,
+    comparison_output_path: str | Path = MULTISOURCE_MODEL_COMPARISON_PATH,
+    summary_output_path: str | Path = MULTISOURCE_EXTERNAL_VALIDATION_SUMMARY_PATH,
+    threshold_values: tuple[float, ...] = DEFAULT_THRESHOLD_VALUES,
+    random_state: int = DEFAULT_RANDOM_STATE,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    """Save multi-source model, threshold sweep, comparison, and summary artifacts."""
+
+    model, threshold_sweep, comparison, summary = build_multisource_retraining_results(
+        original_dataset_path=original_dataset_path,
+        external_train_path=external_train_path,
+        external_test_path=external_test_path,
+        best_params_path=best_params_path,
+        threshold_values=threshold_values,
+        random_state=random_state,
+    )
+    model_path = Path(model_output_path)
+    threshold_path = Path(threshold_output_path)
+    comparison_path = Path(comparison_output_path)
+    summary_path = Path(summary_output_path)
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    threshold_path.parent.mkdir(parents=True, exist_ok=True)
+    comparison_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    save_model_artifact(build_model_artifact(model), model_path)
+    threshold_sweep.to_csv(threshold_path, index=False)
+    comparison.to_csv(comparison_path, index=False)
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return threshold_sweep, comparison, summary
+
+
+def summarize_adversarial_dataset_results(results: pd.DataFrame) -> dict[str, Any]:
+    """Summarize adversarial-style external dataset results."""
+
+    if results.empty:
+        return {
+            "rows": 0,
+            "random_forest": {},
+            "heuristic_baseline": {},
+            "attack_type_counts": {},
+        }
+
+    labels = results["source_label"]
+    rf_predictions = results["random_forest_prediction"]
+    heuristic_predictions = results["heuristic_prediction"]
+    attack_counts: dict[str, int] = {}
+    for attack_types in results["attack_types"]:
+        for attack_type in str(attack_types).split(";"):
+            attack_counts[attack_type] = attack_counts.get(attack_type, 0) + 1
+
+    summary = {
+        "rows": int(len(results)),
+        "phishing_rows": int((labels == 1).sum()),
+        "benign_rows": int((labels == 0).sum()),
+        "random_forest": _prediction_summary(labels, rf_predictions, results["random_forest_phishing_probability"]),
+        "heuristic_baseline": _prediction_summary(labels, heuristic_predictions, None),
+        "attack_type_counts": dict(sorted(attack_counts.items())),
+    }
+    return summary
+
+
+def summarize_external_validation_results(results: pd.DataFrame) -> dict[str, Any]:
+    """Summarize balanced external validation results."""
+
+    if results.empty:
+        return {
+            "rows": 0,
+            "random_forest": {},
+            "heuristic_baseline": {},
+        }
+
+    labels = results["source_label"]
+    rf_predictions = results["random_forest_prediction"]
+    heuristic_predictions = results["heuristic_prediction"]
+    return {
+        "rows": int(len(results)),
+        "phishing_rows": int((labels == 1).sum()),
+        "benign_rows": int((labels == 0).sum()),
+        "random_forest": _prediction_summary(labels, rf_predictions, results["random_forest_phishing_probability"]),
+        "heuristic_baseline": _prediction_summary(labels, heuristic_predictions, None),
+    }
+
+
 def _error_type(actual_label: int, predicted_label: int) -> str:
     if actual_label == 0 and predicted_label == 1:
         return "false_positive"
     if actual_label == 1 and predicted_label == 0:
         return "false_negative"
     return ""
+
+
+def _load_tabular_dataset(path: str | Path) -> pd.DataFrame:
+    dataset_path = Path(path)
+    if dataset_path.suffix == ".parquet":
+        return pd.read_parquet(dataset_path)
+    if dataset_path.suffix == ".csv":
+        return pd.read_csv(dataset_path)
+    raise ValueError("External dataset must be a .csv or .parquet file.")
+
+
+def _external_dataset_to_url_label_dataset(path: str | Path) -> pd.DataFrame:
+    external_dataset = _load_tabular_dataset(path)
+    required_columns = {"url", "status"}
+    missing_columns = required_columns.difference(external_dataset.columns)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        raise ValueError(f"External dataset is missing required columns: {missing}")
+    converted = external_dataset.loc[:, ["url", "status"]].copy()
+    converted["label"] = converted["status"].map(_normalize_external_label)
+    converted = converted.dropna(subset=["url", "label"])
+    return clean_url_dataset(converted.loc[:, ["url", "label"]])
+
+
+def _normalize_external_label(value: Any) -> int | None:
+    normalized = str(value).strip().lower() if not isinstance(value, bool) else value
+    if normalized in PHISHING_LABEL_VALUES:
+        return 1
+    if normalized in BENIGN_LABEL_VALUES:
+        return 0
+    return None
+
+
+def _attack_types_for_external_row(row: pd.Series, indicator_columns: list[str]) -> str:
+    attack_types = []
+    for column in indicator_columns:
+        if _indicator_is_active(row[column]):
+            attack_types.append(ADVERSARIAL_INDICATORS[column])
+    return ";".join(attack_types)
+
+
+def _indicator_is_active(value: Any) -> bool:
+    try:
+        return float(value) > 0
+    except (TypeError, ValueError):
+        return str(value).strip().lower() in {"true", "yes", "y"}
+
+
+def _prediction_summary(
+    labels: pd.Series,
+    predictions: pd.Series,
+    scores: pd.Series | None,
+) -> dict[str, float]:
+    summary = {
+        "accuracy": float(accuracy_score(labels, predictions)),
+        "precision": float(precision_score(labels, predictions, zero_division=0)),
+        "recall": float(recall_score(labels, predictions, zero_division=0)),
+        "f1": float(f1_score(labels, predictions, zero_division=0)),
+    }
+    if scores is not None and len(set(labels)) > 1:
+        summary["roc_auc"] = float(roc_auc_score(labels, scores))
+    return summary
+
+
+def _cross_validate_random_forest_features(
+    features: pd.DataFrame,
+    labels: pd.Series,
+    folds: int,
+    random_state: int,
+) -> dict[str, float | int]:
+    cross_validator = StratifiedKFold(n_splits=folds, shuffle=True, random_state=random_state)
+    scores = cross_validate(
+        build_random_forest_model(random_state=random_state),
+        features,
+        labels,
+        cv=cross_validator,
+        scoring=CV_SCORING,
+        error_score="raise",
+    )
+    row: dict[str, float | int] = {
+        "folds": folds,
+        "rows": int(len(labels)),
+    }
+    for metric_name in CV_SCORING:
+        metric_scores = scores[f"test_{metric_name}"]
+        row[f"{metric_name}_mean"] = float(metric_scores.mean())
+        row[f"{metric_name}_std"] = float(metric_scores.std())
+    return row
+
+
+def _feature_group_for_feature(feature: str) -> str:
+    for group_name, features in FEATURE_GROUPS.items():
+        if feature in features:
+            return group_name
+    return "unassigned"
+
+
+def _json_ready(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _json_ready(item) for key, item in value.items()}
+    if isinstance(value, float) and pd.isna(value):
+        return None
+    if hasattr(value, "item"):
+        return _json_ready(value.item())
+    return value
 
 
 def _build_argument_parser() -> argparse.ArgumentParser:
@@ -308,6 +1233,152 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         help="Path where the generated model-comparison CSV should be written.",
     )
     parser.add_argument(
+        "--cross-validation-output",
+        default=str(CROSS_VALIDATION_RESULTS_PATH),
+        help="Path where the cross-validation results CSV should be written.",
+    )
+    parser.add_argument(
+        "--folds",
+        type=int,
+        default=5,
+        help="Number of folds for stratified cross-validation.",
+    )
+    parser.add_argument(
+        "--tune-random-forest",
+        action="store_true",
+        help="Run Random Forest hyperparameter tuning and save tuning artifacts.",
+    )
+    parser.add_argument(
+        "--tuning-output",
+        default=str(RANDOM_FOREST_TUNING_RESULTS_PATH),
+        help="Path where Random Forest tuning results should be written.",
+    )
+    parser.add_argument(
+        "--best-params-output",
+        default=str(RANDOM_FOREST_BEST_PARAMS_PATH),
+        help="Path where the best Random Forest parameters should be written.",
+    )
+    parser.add_argument(
+        "--tuning-folds",
+        type=int,
+        default=3,
+        help="Number of folds for Random Forest hyperparameter tuning.",
+    )
+    parser.add_argument(
+        "--tuning-iterations",
+        type=int,
+        default=12,
+        help="Number of sampled parameter combinations for Random Forest tuning.",
+    )
+    parser.add_argument(
+        "--tuning-scoring",
+        default="f1",
+        help="Scoring metric used for Random Forest hyperparameter tuning.",
+    )
+    parser.add_argument(
+        "--tuning-jobs",
+        type=int,
+        default=1,
+        help="Number of parallel jobs for Random Forest hyperparameter tuning.",
+    )
+    parser.add_argument(
+        "--ablation-output",
+        default=str(ABLATION_RESULTS_PATH),
+        help="Path where feature ablation results should be written.",
+    )
+    parser.add_argument(
+        "--run-ablation",
+        action="store_true",
+        help="Run Random Forest feature ablation study and save the results.",
+    )
+    parser.add_argument(
+        "--feature-importance-table-output",
+        default=str(FEATURE_IMPORTANCE_TABLE_PATH),
+        help="Path where the report-ready feature importance CSV should be written.",
+    )
+    parser.add_argument(
+        "--external-adversarial-dataset",
+        default=None,
+        help="Path to an external URL dataset used for adversarial-style robustness testing.",
+    )
+    parser.add_argument(
+        "--adversarial-output",
+        default=str(ADVERSARIAL_TEST_RESULTS_PATH),
+        help="Path where external adversarial-style detailed results should be written.",
+    )
+    parser.add_argument(
+        "--adversarial-summary-output",
+        default=str(ADVERSARIAL_TEST_SUMMARY_PATH),
+        help="Path where external adversarial-style summary JSON should be written.",
+    )
+    parser.add_argument(
+        "--include-benign-adversarial",
+        action="store_true",
+        help="Include benign external rows that contain adversarial-style indicators.",
+    )
+    parser.add_argument(
+        "--adversarial-max-rows",
+        type=int,
+        default=None,
+        help="Maximum number of external adversarial-style rows to evaluate.",
+    )
+    parser.add_argument(
+        "--external-validation-dataset",
+        default=None,
+        help="Path to an external labelled URL dataset used for balanced validation.",
+    )
+    parser.add_argument(
+        "--external-validation-output",
+        default=str(EXTERNAL_VALIDATION_RESULTS_PATH),
+        help="Path where balanced external validation detailed results should be written.",
+    )
+    parser.add_argument(
+        "--external-validation-summary-output",
+        default=str(EXTERNAL_VALIDATION_SUMMARY_PATH),
+        help="Path where balanced external validation summary JSON should be written.",
+    )
+    parser.add_argument(
+        "--external-validation-max-rows",
+        type=int,
+        default=None,
+        help="Maximum number of external validation rows to evaluate.",
+    )
+    parser.add_argument(
+        "--run-multisource-retraining",
+        action="store_true",
+        help="Train a tuned Random Forest on original plus external training data and sweep thresholds.",
+    )
+    parser.add_argument(
+        "--external-train",
+        default="data/external/pirocheto_phishing_url_train.parquet",
+        help="Path to the external training split used for multi-source retraining.",
+    )
+    parser.add_argument(
+        "--external-test",
+        default="data/external/pirocheto_phishing_url_test.parquet",
+        help="Path to the external test split used for multi-source evaluation.",
+    )
+    parser.add_argument(
+        "--multisource-model-output",
+        default=str(MULTISOURCE_MODEL_PATH),
+        help="Path where the multi-source Random Forest artifact should be written.",
+    )
+    parser.add_argument(
+        "--threshold-output",
+        default=str(THRESHOLD_SWEEP_RESULTS_PATH),
+        help="Path where threshold sweep results should be written.",
+    )
+    parser.add_argument(
+        "--multisource-comparison-output",
+        default=str(MULTISOURCE_MODEL_COMPARISON_PATH),
+        help="Path where multi-source model comparison results should be written.",
+    )
+    parser.add_argument(
+        "--multisource-summary-output",
+        default=str(MULTISOURCE_EXTERNAL_VALIDATION_SUMMARY_PATH),
+        help="Path where multi-source external validation summary JSON should be written.",
+    )
+    parser.add_argument(
         "--random-state",
         type=int,
         default=DEFAULT_RANDOM_STATE,
@@ -332,10 +1403,83 @@ def main() -> None:
         random_state=args.random_state,
     )
     comparison = save_model_comparison(args.comparison_output)
+    cross_validation = save_cross_validation_results(
+        dataset_path=args.dataset,
+        output_path=args.cross_validation_output,
+        folds=args.folds,
+        random_state=args.random_state,
+    )
     print(f"Saved {len(error_rows)} Random Forest errors to {args.output}")
     print(f"Saved Random Forest error summary to {args.summary_output}")
     print(f"Saved {len(importance_rows)} Random Forest feature importances to {args.feature_importance_output}")
     print(f"Saved {len(comparison)} model comparison rows to {args.comparison_output}")
+    print(f"Saved {len(cross_validation)} cross-validation rows to {args.cross_validation_output}")
+    feature_importance_table = save_feature_importance_table(
+        importance_path=args.feature_importance_output,
+        output_path=args.feature_importance_table_output,
+    )
+    print(f"Saved {len(feature_importance_table)} feature importance table rows to {args.feature_importance_table_output}")
+    if args.tune_random_forest:
+        tuning_results, best_params = save_random_forest_tuning_results(
+            dataset_path=args.dataset,
+            results_output_path=args.tuning_output,
+            best_params_output_path=args.best_params_output,
+            folds=args.tuning_folds,
+            n_iter=args.tuning_iterations,
+            random_state=args.random_state,
+            scoring=args.tuning_scoring,
+            n_jobs=args.tuning_jobs,
+        )
+        print(f"Saved {len(tuning_results)} Random Forest tuning rows to {args.tuning_output}")
+        print(f"Saved best Random Forest parameters to {args.best_params_output}")
+        print(f"Best Random Forest {args.tuning_scoring}: {best_params['best_score']:.4f}")
+    if args.run_ablation:
+        ablation_results = save_feature_ablation_results(
+            dataset_path=args.dataset,
+            output_path=args.ablation_output,
+            folds=args.folds,
+            random_state=args.random_state,
+        )
+        print(f"Saved {len(ablation_results)} feature ablation rows to {args.ablation_output}")
+    if args.external_adversarial_dataset:
+        adversarial_results, adversarial_summary = save_adversarial_dataset_results(
+            external_dataset_path=args.external_adversarial_dataset,
+            results_output_path=args.adversarial_output,
+            summary_output_path=args.adversarial_summary_output,
+            threshold=DEFAULT_PHISHING_THRESHOLD,
+            include_benign=args.include_benign_adversarial,
+            max_rows=args.adversarial_max_rows,
+        )
+        print(f"Saved {len(adversarial_results)} adversarial-style rows to {args.adversarial_output}")
+        print(f"Saved adversarial-style summary to {args.adversarial_summary_output}")
+        print(f"Random Forest adversarial-style recall: {adversarial_summary['random_forest'].get('recall', 0.0):.4f}")
+    if args.external_validation_dataset:
+        external_results, external_summary = save_external_validation_results(
+            external_dataset_path=args.external_validation_dataset,
+            results_output_path=args.external_validation_output,
+            summary_output_path=args.external_validation_summary_output,
+            threshold=DEFAULT_PHISHING_THRESHOLD,
+            max_rows=args.external_validation_max_rows,
+        )
+        print(f"Saved {len(external_results)} external validation rows to {args.external_validation_output}")
+        print(f"Saved external validation summary to {args.external_validation_summary_output}")
+        print(f"Random Forest external validation F1: {external_summary['random_forest'].get('f1', 0.0):.4f}")
+    if args.run_multisource_retraining:
+        threshold_sweep, comparison, summary = save_multisource_retraining_results(
+            original_dataset_path=args.dataset,
+            external_train_path=args.external_train,
+            external_test_path=args.external_test,
+            model_output_path=args.multisource_model_output,
+            threshold_output_path=args.threshold_output,
+            comparison_output_path=args.multisource_comparison_output,
+            summary_output_path=args.multisource_summary_output,
+            random_state=args.random_state,
+        )
+        print(f"Saved multi-source model to {args.multisource_model_output}")
+        print(f"Saved {len(threshold_sweep)} threshold rows to {args.threshold_output}")
+        print(f"Saved {len(comparison)} multi-source comparison rows to {args.multisource_comparison_output}")
+        print(f"Saved multi-source summary to {args.multisource_summary_output}")
+        print(f"Best multi-source threshold F1: {summary['best_f1_threshold']['f1']:.4f}")
 
 
 if __name__ == "__main__":

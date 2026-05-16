@@ -1,0 +1,29 @@
+rank,feature,importance,feature_group,interpretation,caution
+1,uses_https,0.22160153956665846,binary_indicators,Indicates whether the URL uses HTTPS.,Dataset-dependent signal; HTTPS should not be interpreted as proof of safety or danger.
+2,entropy,0.12950941009350592,complexity_features,Measures character randomness and possible obfuscation.,High entropy can also appear in legitimate generated URLs.
+3,digit_ratio,0.11336496355298174,character_composition,Measures how much of the URL is numeric.,Numeric-heavy URLs can be suspicious but are not always malicious.
+4,digit_count,0.09645217520191955,character_composition,Counts numeric characters in the URL.,"Useful for generated-looking URLs, but some benign URLs contain IDs."
+5,url_length,0.05390781929908346,length_features,Measures total URL length.,Long URLs may indicate tracking or obfuscation but are not inherently phishing.
+6,path_length,0.052314342898322874,length_features,Measures length of the URL path.,Long paths can appear in both phishing and legitimate web applications.
+7,special_char_ratio,0.05188387944753875,character_composition,Measures the proportion of non-alphanumeric characters.,Special characters can indicate obfuscation but also normal query/path syntax.
+8,letter_count,0.046211351303064675,character_composition,Counts alphabetic characters in the URL.,Acts as a general lexical composition signal.
+9,hyphen_count,0.04123291377976526,character_composition,Counts hyphens in the URL.,Hyphens can be used in deceptive domains but are common in benign domains too.
+10,hostname_length,0.035698672833093005,length_features,Measures domain and subdomain length.,Long hostnames can indicate suspicious subdomain structures.
+11,dot_count,0.03434771363866133,character_composition,Counts dot characters in the URL.,Many dots may indicate deep subdomain nesting.
+12,path_depth,0.025969331017514828,structural_features,Counts path segments.,Deep paths may reflect complex routing or phishing landing pages.
+13,subdomain_count,0.02454566484921356,structural_features,Counts subdomain levels before the registered domain.,Useful for detecting deceptive nested subdomains.
+14,slash_count,0.020576597524491043,character_composition,Counts slash characters.,Correlates with URL structure and path depth.
+15,special_char_count,0.01722560537642636,character_composition,Counts non-alphanumeric characters.,Captures punctuation-heavy or encoded-looking URLs.
+16,hostname_digit_ratio,0.015285880590596991,character_composition,Measures numeric density in the hostname.,"May indicate generated domains, but some benign services use digits."
+17,suspicious_keyword_count,0.0077358501505651895,keyword_features,Counts security or account-related words.,"Useful supporting signal, but easy for attackers to avoid."
+18,query_length,0.003960671531558492,length_features,Measures query string length.,"Long queries may reflect tracking, forms, or obfuscation."
+19,equals_count,0.0029244591638250984,character_composition,Counts equals signs in query parameters.,Mostly reflects query string structure.
+20,at_symbol_count,0.0010501303695839375,character_composition,Counts at symbols.,"Can indicate URL obfuscation, though rare in this dataset."
+21,query_parameter_count,0.0009003385691748327,structural_features,Counts query parameters.,Captures URL parameter complexity.
+22,has_query,0.0008604146832437449,binary_indicators,Indicates whether a query string is present.,Low-level structure signal.
+23,underscore_count,0.0007414795673695056,character_composition,Counts underscores.,Minor lexical composition signal.
+24,ampersand_count,0.0005873068297142742,character_composition,Counts ampersands in query strings.,Mostly reflects multiple query parameters.
+25,question_mark_count,0.0005091640318727002,character_composition,Counts question marks.,Mostly indicates query string presence.
+26,has_fragment,0.0004491514925672392,binary_indicators,Indicates whether a URL fragment is present.,Low-importance structure signal in this dataset.
+27,has_ip_host,0.00010173823415019193,binary_indicators,Indicates whether the hostname is an IP address.,"Important cybersecurity signal, but rare in this dataset."
+28,has_port,5.14344035370524e-05,binary_indicators,Indicates whether a custom port is present.,Potentially suspicious but rare in this dataset.

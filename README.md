@@ -14,11 +14,11 @@ The project now includes:
 - heuristic phishing baseline
 - reproducible train/test splitting
 - Logistic Regression, Random Forest, and SVM model evaluation
-- Random Forest deployment model artifact
+- multi-source Random Forest deployment model artifact
 - backend inference pipeline
 - Streamlit demo app with prediction output and explanation support
 
-Random Forest is the selected deployment candidate based on the Sprint 4 evaluation results.
+The Streamlit app uses the multi-source Random Forest selected during Phase 3 external validation.
 
 ## Repository Structure
 
@@ -69,15 +69,21 @@ The app lets a user submit a URL and returns:
 The hosted demo uses:
 
 ```text
-models/random_forest_model.joblib
+models/multisource_random_forest_model.joblib
 ```
 
-This file is intentionally committed so the Streamlit app can run immediately without retraining the model during deployment.
+This file is intentionally committed so the Streamlit app can run immediately without retraining the model during deployment. The app uses a phishing probability threshold of `0.40`, selected from the Phase 3 threshold evaluation.
 
-To regenerate the model artifact from the local dataset:
+To regenerate the original single-source model artifact from the local dataset:
 
 ```bash
 python3 -m src.inference --save-model
+```
+
+To regenerate the multi-source deployment artifact:
+
+```bash
+python3 -m src.evaluation --run-multisource-retraining
 ```
 
 The local training dataset is expected at:

@@ -1,0 +1,42 @@
+{
+  "original_training_rows": 115231,
+  "external_training_rows": 7657,
+  "combined_training_rows": 122870,
+  "external_test_rows": 3772,
+  "phishing_test_rows": 1886,
+  "benign_test_rows": 1886,
+  "best_params": {
+    "n_estimators": 100,
+    "min_samples_split": 5,
+    "min_samples_leaf": 2,
+    "max_depth": null,
+    "class_weight": "balanced_subsample"
+  },
+  "default_threshold": {
+    "model": "multisource_random_forest_default_threshold",
+    "threshold": 0.5,
+    "accuracy": 0.8162778366914104,
+    "precision": 0.8573996405032954,
+    "recall": 0.7587486744432662,
+    "f1": 0.8050632911392405,
+    "roc_auc": 0.8835302316898866
+  },
+  "best_f1_threshold": {
+    "model": "multisource_random_forest_best_f1_threshold",
+    "threshold": 0.4,
+    "accuracy": 0.813626723223754,
+    "precision": 0.8202490525175961,
+    "recall": 0.8032873806998939,
+    "f1": 0.8116796142512724,
+    "roc_auc": 0.8835302316898866
+  },
+  "heuristic_baseline": {
+    "model": "heuristic_baseline",
+    "threshold": 4.0,
+    "accuracy": 0.6717921527041357,
+    "precision": 0.8608017817371938,
+    "recall": 0.40986214209968186,
+    "f1": 0.555316091954023,
+    "roc_auc": null
+  }
+}
