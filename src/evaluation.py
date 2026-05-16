@@ -9,17 +9,38 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold, cross_validate, train_test_split
 
 from src.features import FEATURE_NAMES, extract_feature_rows
-from src.model_training import MODEL_METRICS_PATHS, train_random_forest
-from src.training import DATASET_PATH, DEFAULT_RANDOM_STATE, DEFAULT_TEST_SIZE, FeatureSplit, clean_url_dataset, load_url_dataset
+from src.model_training import (
+    MODEL_METRICS_PATHS,
+    build_logistic_regression_model,
+    build_random_forest_model,
+    build_svm_model,
+    train_random_forest,
+)
+from src.training import (
+    DATASET_PATH,
+    DEFAULT_RANDOM_STATE,
+    DEFAULT_TEST_SIZE,
+    FeatureSplit,
+    build_feature_matrix,
+    clean_url_dataset,
+    load_url_dataset,
+)
 
 
 RANDOM_FOREST_ERROR_ANALYSIS_PATH = Path("models/random_forest_error_analysis.csv")
 RANDOM_FOREST_ERROR_SUMMARY_PATH = Path("models/random_forest_error_summary.json")
 RANDOM_FOREST_FEATURE_IMPORTANCE_PATH = Path("models/random_forest_feature_importance.json")
 MODEL_COMPARISON_PATH = Path("models/model_comparison.csv")
+CROSS_VALIDATION_RESULTS_PATH = Path("models/cross_validation_results.csv")
+CV_SCORING = {
+    "precision": "precision",
+    "recall": "recall",
+    "f1": "f1",
+    "roc_auc": "roc_auc",
+}
 ERROR_ANALYSIS_FEATURE_COLUMNS = [
     "url_length",
     "hostname_length",
@@ -272,6 +293,65 @@ def save_model_comparison(
     return comparison
 
 
+def build_cross_validation_results(
+    dataset_path: str | Path = DATASET_PATH,
+    folds: int = 5,
+    random_state: int = DEFAULT_RANDOM_STATE,
+) -> pd.DataFrame:
+    """Evaluate supported ML models with stratified k-fold cross-validation."""
+
+    dataset = load_url_dataset(dataset_path)
+    features, labels = build_feature_matrix(dataset)
+    cross_validator = StratifiedKFold(n_splits=folds, shuffle=True, random_state=random_state)
+    models = {
+        "logistic_regression": build_logistic_regression_model(random_state=random_state),
+        "random_forest": build_random_forest_model(random_state=random_state),
+        "svm": build_svm_model(random_state=random_state),
+    }
+
+    rows = []
+    for model_name, model in models.items():
+        scores = cross_validate(
+            model,
+            features,
+            labels,
+            cv=cross_validator,
+            scoring=CV_SCORING,
+            error_score="raise",
+        )
+        row: dict[str, Any] = {
+            "model": model_name,
+            "folds": folds,
+            "rows": int(len(labels)),
+        }
+        for metric_name in CV_SCORING:
+            metric_scores = scores[f"test_{metric_name}"]
+            row[f"{metric_name}_mean"] = float(metric_scores.mean())
+            row[f"{metric_name}_std"] = float(metric_scores.std())
+        rows.append(row)
+
+    return pd.DataFrame(rows).sort_values("f1_mean", ascending=False).reset_index(drop=True)
+
+
+def save_cross_validation_results(
+    dataset_path: str | Path = DATASET_PATH,
+    output_path: str | Path = CROSS_VALIDATION_RESULTS_PATH,
+    folds: int = 5,
+    random_state: int = DEFAULT_RANDOM_STATE,
+) -> pd.DataFrame:
+    """Save stratified k-fold cross-validation results as a report-ready CSV."""
+
+    results = build_cross_validation_results(
+        dataset_path=dataset_path,
+        folds=folds,
+        random_state=random_state,
+    )
+    results_path = Path(output_path)
+    results_path.parent.mkdir(parents=True, exist_ok=True)
+    results.to_csv(results_path, index=False)
+    return results
+
+
 def _error_type(actual_label: int, predicted_label: int) -> str:
     if actual_label == 0 and predicted_label == 1:
         return "false_positive"
@@ -308,6 +388,17 @@ def _build_argument_parser() -> argparse.ArgumentParser:
         help="Path where the generated model-comparison CSV should be written.",
     )
     parser.add_argument(
+        "--cross-validation-output",
+        default=str(CROSS_VALIDATION_RESULTS_PATH),
+        help="Path where the cross-validation results CSV should be written.",
+    )
+    parser.add_argument(
+        "--folds",
+        type=int,
+        default=5,
+        help="Number of folds for stratified cross-validation.",
+    )
+    parser.add_argument(
         "--random-state",
         type=int,
         default=DEFAULT_RANDOM_STATE,
@@ -332,10 +423,17 @@ def main() -> None:
         random_state=args.random_state,
     )
     comparison = save_model_comparison(args.comparison_output)
+    cross_validation = save_cross_validation_results(
+        dataset_path=args.dataset,
+        output_path=args.cross_validation_output,
+        folds=args.folds,
+        random_state=args.random_state,
+    )
     print(f"Saved {len(error_rows)} Random Forest errors to {args.output}")
     print(f"Saved Random Forest error summary to {args.summary_output}")
     print(f"Saved {len(importance_rows)} Random Forest feature importances to {args.feature_importance_output}")
     print(f"Saved {len(comparison)} model comparison rows to {args.comparison_output}")
+    print(f"Saved {len(cross_validation)} cross-validation rows to {args.cross_validation_output}")
 
 
 if __name__ == "__main__":

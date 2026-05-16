@@ -5,10 +5,12 @@ from pathlib import Path
 import pandas as pd
 
 from src.evaluation import (
+    build_cross_validation_results,
     build_model_comparison_rows,
     build_error_analysis_rows,
     extract_random_forest_feature_importance,
     make_url_feature_split,
+    save_cross_validation_results,
     save_model_comparison,
     save_error_summary,
     save_random_forest_feature_importance,
@@ -241,6 +243,36 @@ class EvaluationTests(unittest.TestCase):
 
             self.assertTrue(output_path.exists())
             self.assertEqual(len(comparison), 1)
+
+    def test_build_cross_validation_results_returns_model_metric_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_path = Path(temp_dir) / "dataset.csv"
+            _sample_dataset().to_csv(dataset_path, index=False)
+
+            results = build_cross_validation_results(dataset_path=dataset_path, folds=3, random_state=5)
+
+            self.assertEqual(set(results["model"]), {"logistic_regression", "random_forest", "svm"})
+            self.assertEqual(set(results["folds"]), {3})
+            self.assertEqual(set(results["rows"]), {12})
+            for metric_name in ["precision", "recall", "f1", "roc_auc"]:
+                self.assertIn(f"{metric_name}_mean", results.columns)
+                self.assertIn(f"{metric_name}_std", results.columns)
+
+    def test_save_cross_validation_results_writes_csv(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset_path = Path(temp_dir) / "dataset.csv"
+            output_path = Path(temp_dir) / "cross_validation.csv"
+            _sample_dataset().to_csv(dataset_path, index=False)
+
+            results = save_cross_validation_results(
+                dataset_path=dataset_path,
+                output_path=output_path,
+                folds=3,
+                random_state=5,
+            )
+
+            self.assertTrue(output_path.exists())
+            self.assertEqual(list(pd.read_csv(output_path).columns), list(results.columns))
 
 
 if __name__ == "__main__":
