@@ -12,6 +12,8 @@ env/
 
 # Local datasets
 data/Dataset.csv
+data/legitPhish.csv
+data/external/legitphish_normalized.csv
 data/external/*.parquet
 
 # Jupyter
